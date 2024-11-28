@@ -1,0 +1,1942 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Dovydas Linkus
+// @version=5
+
+// BETA v0.99   - Implemented most of the functonallity and created a "baseline" indicator.
+// v0.10        - Updated libraries and various bug fixes.
+// v0.12        - Fixed some drawing issues where the lines and boxed would not start and or end on time.
+// v0.12f       - Expanded Fibonacci Retracement settings and added functionality.
+// v0.13h       - Added functionality of holiday days. Each holiday day will be marked in orange after market open.
+
+//////////////////////////////////////////////////////////////////
+//                          IMPORTS                             //
+//////////////////////////////////////////////////////////////////
+import Illukasse/DRIDR/37 as DR
+import Illukasse/LinesBoxes/12 as LB
+import Illukasse/Candle/8 as C
+import Illukasse/JHINN/24 as JHINN
+
+//////////////////////////////////////////////////////////////////
+//                         CONSTANTS                            //
+//////////////////////////////////////////////////////////////////
+const bool   _EXPERIMENTAL_ON        = true
+
+const int    _MAX_VIS_PER_TYPE       = 50
+
+TIMEZONE                             = 'America/New_York'
+timeinrange(res, sess) => not na(time(res, sess + ':123456', TIMEZONE)) ? true : false
+
+ONE_HOUR                             = 3600*1000
+ONE_DAY                              = 24*ONE_HOUR
+
+// Checklist Dashboard
+const string Selected               = "🟢"
+const string NotSelected            = "🔘"
+
+// Indicator Base
+const string _Symbol                 = "🌊"
+const string _OPOSymbolA             = "↓"
+const string _OPOSymbolB             = "↑"
+const string _AbbName                = "wave"
+const string _IndicatorName          = str.upper("FWDR")
+const string _Version                = "0.13h"
+const int    _MaxBoxes               = 500
+const int    _MaxLines               = 500
+const int    _MaxLabels              = 500
+
+const int    _STD_LEVELS_LIMIT       = 50
+
+// DR/IDR Timeframe
+const string _DRTimeframe            = "5"
+
+// Watermark Default Text
+const string _WATERMARK_TIT          = "DON'T PANIC, STAY CALM"
+const string _WATERMARK_SUB          = "DON'T OVERCOMPLICATE. CONF. & SIGNAL, THAT'S IT AND LET THE TRADE PLAYOUT"
+
+
+const string _DB_NAME                = "DRONE"
+const string _DATABASE_NAME          = '"' + _DB_NAME + '"'
+
+// Range Input Symbol
+const string _INPUT_RANGE            = "→"
+
+// Default Fractal Frenzy Step Settings and dynamic tooltip
+const int    _StepSensitivity        = 3
+const bool   _OncePerStep            = true
+var string   _OncePerStepDef         = _OncePerStep ? " (default), " : ", "
+
+var string   _OnlyFirstBreakInfo     = "If selected" + _OncePerStepDef + "signals will only print for the first candle-break of a " + _AbbName + ",
+ and will not re-signal a break of the same " + _AbbName + " until another is made.
+ \n\nIf not sellected will produce repeat signals of the same " + _AbbName + " break."
+
+// Default Moving Average Settings and dynamic tooltip
+const bool   _BiasFilter             = true
+var string   _BiasFilterDef          = _BiasFilter ? " (default), " : ", "
+var string   _BiasFilterInfo         = "If enabled" + _BiasFilterDef + "the moving average will be used as an additional signal filter to where if price is above it, we only take long possitions and vice versa."
+
+// Opposing Average Price Signal Settings and dynamic tooltip
+const bool  _OPOSignals              = false
+var string  _OPOSignalsDef           = _OPOSignals ? " (default), " : ", "
+var string  _OPOSignalInfo           = "If selected" + _OPOSignalsDef + "an average price over a period will be compared against the `Delta`.
+ If average price is less than `Delta` a warning symbol will appear (" + _OPOSymbolA + "), if the price is above the `Delta` a warning symbol (" + _OPOSymbolB + ") will be displayed - it is simply based on the previous " + _AbbName + " signal.
+ \n\nThis indicates a loss in momentum and acts as a potential early exit point.\n\nOpposing signals should act as a potential hard exit point."
+
+// Construct Indicator Title
+indicator(_IndicatorName + " " + _Symbol + " v"+_Version, 
+  overlay           = true, 
+  max_boxes_count   = _MaxBoxes, 
+  max_lines_count   = _MaxLines, 
+  max_labels_count  = _MaxLabels
+  )
+
+
+//////////////////////////////////////////////////////////////////
+//                 HUMAN FRIENDLY INPUT OPTIONS                 //
+//////////////////////////////////////////////////////////////////
+string _TINY            = "Tiny"
+string _SMALL           = "Small"
+string _NORMAL          = "Normal"
+
+string _DASHED          = "Dashed"
+string _DOTTED          = "Dotted"
+string _SOLID           = "Solid"
+
+SWITCH_SIZE(_inputOption) =>
+    switch(_inputOption)
+        _TINY     => size.tiny
+        _SMALL    => size.small
+        _NORMAL   => size.normal
+        => size.auto
+        
+SWITCH_STYLE(_inputOption) =>
+    switch(_inputOption)
+        _DASHED     => line.style_dashed
+        _DOTTED     => line.style_dotted
+        _SOLID      => line.style_solid
+        => size.auto
+
+//////////////////////////////////////////////////////////////////
+//                          COLORS                              //
+//////////////////////////////////////////////////////////////////
+const color cCeiling    = #858aa7
+const color cFloor      = #4a4e69
+const color cDelta      = #F2AF29
+const color cBull       = #3a86ff
+const color cBear       = #4a4e69
+
+var color   cBullBox    = #417076
+var color   cBearBox    = #9598a1
+var color   cDeadZone   = #9598a1
+var color   cSTDColor   = #9598a1
+
+color cSpecial          = #2F9C95
+color cLimiter          = #F78E69
+color cStandart         = #BC96E6
+color cGAP              = #D8A47F
+color cDRC              = #90bff9
+color cVI               = #DEB841
+color cCluster          = #a6b0d0
+
+color cDR               = #7189FF
+color cIDR              = #39393A
+color cMid              = #4C4B63
+color cOpen             = #81C14B
+color cClose            = #FF8552
+
+color cWDR              = #417076
+
+color cRetracement      = #F2AF29
+color cExtension        = #81C14B
+
+
+
+//////////////////////////////////////////////////////////////////
+//                  VOLUME IMBALANCE SYMBOLS                    //
+//////////////////////////////////////////////////////////////////
+const string _SYM_VIB               = "🌩️"
+const string _SYM_LIMITER           = "🚷"
+const string _SYM_STANDART          = "☯️"
+const string _SYM_SPECIAL           = "🚀"
+
+
+//////////////////////////////////////////////////////////////////
+//                           GROUPS                             //
+//////////////////////////////////////////////////////////////////
+const string SignalsGroup           = "SIGNAL DRAWING ✏️"
+const string TimeGroup              = "SESSIONS & TIMES ⌛"
+var string StepGroup                = "" + _AbbName + " SETTINGS " + _Symbol
+const string MAGroup                = "MOVING AVERAGE 🧵"
+const string RepaintGroup           = "SIGNAL REPAINTING"
+const string RepaintingTooltip      = "⚠️ IF ENABLED, WAIT FOR CANDLE TO CLOSE"
+const string FIBGroup               = "FIBONACCI RETRACEMENT 🎯"
+const string STDLGroup              = "STANDART DEVIATIONS ↕️"
+
+const string RETEXTString           = "AREAS AND TIMES 📌"
+var string   RETEXTGroup            = str.length(_DATABASE_NAME) > 0 ? _DATABASE_NAME + " " + RETEXTString : RETEXTString
+const string ImbalanceGroup         = "VOLUME IMBALANCES 🏷️"
+const string DRStylesGroup          = "DR/IDR SETTINGS 🎭"
+const string BoxGroup               = "BOX, LINES AND LABELS STYLING 🧊"
+const string MiscGroup              = "MISCELLANEOUS 💡"
+const string WatermarkGroup         = "WATERMARK ✔️"
+
+//////////////////////////////////////////////////////////////////
+//                        DR STATISTICS                         //
+//////////////////////////////////////////////////////////////////
+var int ADR_Sess = 0
+var int ODR_Sess = 0
+var int RDR_Sess = 0
+
+var int ADR_True_Sess = 0
+var int ODR_True_Sess = 0
+var int RDR_True_Sess = 0
+
+//////////////////////////////////////////////////////////////////
+//                          VARIABLES                           //
+//////////////////////////////////////////////////////////////////
+bool    Buy                 = false
+bool    Sell                = false
+var float   AVERAGE_PRICE   = na
+
+
+// Prevents a bug from happening where if using a split screen with the same indicator but one is on lower TM, it starts mixing the values
+const bool AlwaysUseDRTM    = true 
+
+var bool UseDRTimeframe     = false
+
+
+var box   DRBox         = na
+var box   RetraceBoxA   = na
+var box   RetraceBoxB   = na
+var box   ExtendBox     = na
+var float OpenPrice     = na
+var float ClosePrice    = na
+var int   OpenTime      = na
+var int   RangeEndTime  = na
+var int   EndTime       = na
+
+var int   DRFirstBrkTime = na
+
+var float DRHigh        = na
+var float DRLow         = na
+
+
+var bool DRHighBrk      = false
+var bool DRLowBrk       = false
+var int DRHighBrkTime   = 0
+var int DRLowBrkTime    = 0
+var bool DRBroken       = false
+var bool DRFalse        = false
+
+
+var float IDRHigh       = na
+var float IDRLow        = na
+var float IDRMid        = na
+
+var line DRHigh_L       = na
+var line DRLow_L        = na
+var line IDRHigh_L      = na
+var line IDRLow_L       = na
+
+var line FIB_L          = na
+
+var line IDRMid_L       = na
+
+var line OpenPrice_L    = na
+var line ClosePrice_L   = na
+
+var line Retracement_L  = na
+var line Extension_L    = na
+
+var float FIB = na
+
+// Box arrays for different imbalances
+var box[] _DRClusters  = array.new_box()
+
+//////////////////////////////////////////////////////////////////
+//                           INPUTS                             //
+//////////////////////////////////////////////////////////////////
+
+iLOCKOUT             = input.bool(false,               "LOCK ME OUT",                                   group = "🚨 Stop trading for today. You enabled this yourself - remember that")
+
+// ------------------- REPAINTING SETTINGS -------------------- //
+iRepainting          = input.bool(true,               "Allow Signal Repainting?",                       group = RepaintingTooltip, confirm = true)
+
+// ------------------- SESSIONS SETTINGS -------------------- //
+
+iODR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show London session', inline = "ODR")
+iODRTime            = input.session("0300-0830",        "ODR",                                          group = TimeGroup, tooltip = "Enable or Disable London session and set times", inline = "ODR")
+
+iRDR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show New York session', inline = "RDR")
+iRDRTime            = input.session("0930-1600",        "RDR",                                          group = TimeGroup, tooltip = "Enable or Disable New York session and set times", inline = "RDR")
+
+iADR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show Tokyo session', inline = "ADR")
+iADRTime            = input.session("1930-0200",        "ADR",                                          group = TimeGroup, tooltip = "Enable or Disable Tokyo session and set times", inline = "ADR")
+
+// -------------------- DEADZONE SETTINGS --------------------- //
+iDeadZone           = input.bool(true, '', group = TimeGroup, tooltip='Show Dead Zone', inline = "deadzone")
+iDeadZoneTime       = input.session('1700-2000', 'DEZ', group = TimeGroup, tooltip = "Enable or Disable Dead Zone and set time", inline = "deadzone")
+
+
+// ------------------ DR/IDR SETTINGS -------------------- //
+
+iDR                 = input.bool(true, "", group = DRStylesGroup, inline = "DR LINE")
+iDRLineStyle        = input.string(_SOLID, "DR", options = [_DASHED, _DOTTED, _SOLID], group = DRStylesGroup, inline = "DR LINE")
+iCDR                = input.color(cDR, "", group = DRStylesGroup, inline = "DR LINE")
+
+iIDR                = input.bool(true, "", group = DRStylesGroup, inline = "IDR LINE")
+iIDRLineStyle       = input.string(_DASHED, "IDR", options = [_DASHED, _DOTTED, _SOLID], group = DRStylesGroup, inline = "IDR LINE")
+iCIDR               = input.color(cIDR, "", group = DRStylesGroup, inline = "IDR LINE")
+
+
+iMid                = input.bool(true, "", group = DRStylesGroup, inline = "MID LINE")
+iMidLineStyle       = input.string(_DOTTED, "Middle", options = [_DASHED, _DOTTED, _SOLID], group = DRStylesGroup, inline = "MID LINE")
+iCMid               = input.color(cMid, "", group = DRStylesGroup, inline = "MID LINE")
+
+iOpen                = input.bool(true, "", group = DRStylesGroup, inline = "OPEN LINE")
+iOpenLineStyle       = input.string(_SOLID, "Open", options = [_DASHED, _DOTTED, _SOLID], group = DRStylesGroup, inline = "OPEN LINE")
+iCOpen               = input.color(cOpen, "", group = DRStylesGroup, inline = "OPEN LINE")
+
+iClose                = input.bool(true, "", group = DRStylesGroup, inline = "CLOSE LINE")
+iCloseLineStyle       = input.string(_SOLID, "Close", options = [_DASHED, _DOTTED, _SOLID], group = DRStylesGroup, inline = "CLOSE LINE")
+iCClose               = input.color(cClose, "", group = DRStylesGroup, inline = "CLOSE LINE")
+
+iWDR                = input.bool(true, "WDR", group = DRStylesGroup, inline = "WDR")
+iCWDR               = input.color(cWDR, "", group = DRStylesGroup, inline = "WDR", tooltip = "WDR (Weekly DR Range) acts as a magnet, especially on Thursdays.\n\nTurnaround Thursday refers to the market phenomenon where the S&P 500 and other major indices often reverse their direction on Thursdays following a significant move from Tuesday.")
+iDRClusters         = input.bool(true, "DRC", group = DRStylesGroup, inline = "DR CLUSTERS")
+iDRClusterDays      = input.int(3, " ", minval = 1, step = 1, inline = "DR CLUSTERS", group = DRStylesGroup)
+iCDRClusters        = input.color(cDRC, "", group = DRStylesGroup, inline = "DR CLUSTERS", tooltip = "Checbox: Enable or disable DR/IDR Clusters. Acts as a S/R. \n\n\Input: Days back to show DR/IDR clusters for. \n\nColor: Choose DRC Color")
+
+iColorDRBox         = input.bool(true, "Color DR Box based on close?", group = DRStylesGroup, tooltip = "If disabled second color will be used for all DR boxes.")
+iCBullBox           = input.color(cBullBox, "", group = DRStylesGroup, inline = "BOX COLOR")
+iCBearBox           = input.color(cBearBox, "", group = DRStylesGroup, inline = "BOX COLOR")
+
+// -------------------- FIBONACCI SETTINGS --------------------- //
+iFIB                = input.bool(true, "", group = FIBGroup, inline = "FIB LINE 1")
+iFIBVal             = input.int(75, "", group = FIBGroup, inline = "FIB LINE 1", minval = 1, maxval = 100)
+iCFIB               = input.color(cDR, "", group = FIBGroup, inline = "FIB LINE 1", tooltip = "Checkbox: If selected, will automatically plot a Fibonacci retracement when direction is confirmed.\n\nInput: Fibonacci retracement level.\n\nColor: Fibonacci Retracement line color")
+iFIBType            = input.string("IDR", "Type", options = ["DR", "IDR"], group = FIBGroup, inline = "FIB LINE 2")
+iFIBStyle           = input.string(_DASHED, "", options = [_DASHED, _DOTTED, _SOLID], group = FIBGroup, inline = "FIB LINE 2", tooltip = "Dropdown: Choose which High & Low points Fibonacci will use.\n\nDropdown 2: Select the line style.")
+
+
+// ------------------ STANDART DEVIATION SETTINGS -------------------- //
+
+iSTDLines                   = input.bool(true, "",                                      group = STDLGroup,  inline = "STD 1")
+iSTDLineStyle               = input.string(_DOTTED, "",                                 group = STDLGroup,  inline = "STD 1", options = [_DASHED, _DOTTED, _SOLID])
+iSTDLineColor               = input.color(cSTDColor, "",                                group = STDLGroup,  inline = "STD 1")
+iSTDLabels                  = input.bool(true, "Labels",                                group = STDLGroup,  inline = "STD 1", tooltip = "If enabled, shows the Standard Deviation lines in 0.5 IDR range increments.\n\nDropdown: Choose line style for standart deviations\n\nColor: Choose color of standart deviation lines.\n\nLabels: Enable or disable labels")
+
+iSTDAll                     = input.bool(false, "All",                                  group = STDLGroup,  inline = "STD 2")
+iSTDLineNegative            = input.int(8, "",                 minval=1,                group = STDLGroup,  inline = "STD 2")
+iSTDLinePositive            = input.int(8, _INPUT_RANGE,       minval=1,                group = STDLGroup,  inline = "STD 2", tooltip = "All: If enabled, shows all the STD lines on previous sessions.")
+
+
+// ------------------ RETRACEMENT AND EXTENSION SETTINGS -------------------- //
+
+iRetrace                    = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "RETRACE")
+retrace_begin               = input.float(-0.1, "RET",               minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE")
+retrace_end                 = input.float(-0.3, _INPUT_RANGE,        minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE")
+icRetrace                   = input.color(cRetracement, "",                                                     group = RETEXTGroup,  inline = "RETRACE")
+
+iRetrace2                   = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "RETRACE 2")
+retrace_begin2              = input.float(-0.4, "RET",               minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE 2")
+retrace_end2                = input.float(-0.6, _INPUT_RANGE,        minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE 2")
+icRetrace2                  = input.color(cClose, "",                                                           group = RETEXTGroup,  inline = "RETRACE 2")
+
+iExtend                     = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "EXTEND")
+extension_begin             = input.float(2.1, "EXT",               minval=0, step = 0.1,                       group = RETEXTGroup,  inline = "EXTEND")
+extension_end               = input.float(2.3, _INPUT_RANGE,        minval=0, step = 0.1,                       group = RETEXTGroup,  inline = "EXTEND")
+icExtend                    = input.color(cExtension, "",                                                       group = RETEXTGroup,  inline = "EXTEND")
+
+iMedian                     = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "MEDIAN")
+iMedianTime                 = input.session("1130-1355", "MED",                                                 group = RETEXTGroup,  inline = "MEDIAN", tooltip = "Requires Standart Deviations to be enabled")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---------------- VOLUME IMBALANCE SETTINGS ------------------ //
+iVI                 = input.bool(true, "", group = ImbalanceGroup, inline = "VI")
+icVI                = input.color(cVI, "Regular " + _SYM_VIB, group = ImbalanceGroup, inline = "VI")
+iVIClusters         = input.bool(true, "Clusters", group = ImbalanceGroup, inline = "VI")
+icCluster           = input.color(cCluster, "", group = ImbalanceGroup, inline = "VI", tooltip = "If clusters enabled (default), rebalanced VIBs (non-magnetic) will still show on the chart, potentially acting as a TP/SL locations. Use as a confluence. \n\nColor: Choose color for clusters")
+
+iGAP                = input.bool(true, "", group = ImbalanceGroup, inline = "GAP")
+icGAP               = input.color(cGAP, "Price GAP", group = ImbalanceGroup, inline = "GAP")
+
+iSpecial         = input.bool(false, "", group = ImbalanceGroup, inline = "TRAMPOLINE")
+icSpecial        = input.color(cSpecial, "Trampoline " + _SYM_SPECIAL, group = ImbalanceGroup, tooltip = 'Algo: "Oops, I moved too fast". Works as trampoline', inline = "TRAMPOLINE")
+
+iLimiter            = input.bool(false, "", group = ImbalanceGroup, inline = "LIMITER")
+icLimiter           = input.color(cLimiter, "Range Limiter " + _SYM_LIMITER, group = ImbalanceGroup, tooltip = "Price likes to stay between imbalances", inline = "LIMITER")
+
+iStandart           = input.bool(false, "", group = ImbalanceGroup, inline = "STANDART")
+icStandart          = input.color(cStandart, "Standart " + _SYM_STANDART, group = ImbalanceGroup, tooltip = "Algo is in sync. Perfect price delivery", inline = "STANDART")
+
+
+// ---------------- MOVING AVERAGE SETTINGS ----------------- //
+iMA_Length           = input.int(75,                    "Length",                                       group = MAGroup)
+iMA_Source           = input.source(close,              "Source",                                       group = MAGroup)
+iMA_Type             = input.string("EMA",              "Type",                                         options=["SMA","EMA","DEMA","TEMA","LSMA","WMA","VAMA","TMA","HMA", "JMA", "LOWESS", "Kijun v2","McGinley"],  group = MAGroup)
+iMA_Filter           = input.bool(true,                 "Use as bias filter",                           group = MAGroup, tooltip = _BiasFilterInfo)
+
+
+// ---------------------- STEPS SETTINGS ---------------------- //
+iTimeframe            = input.timeframe("",             "Timeframe",                                    group = StepGroup)
+iStepSensitivity      = input.int(_StepSensitivity,     _AbbName + " Sensitivity",                      group = StepGroup, minval = 1)
+iOncePerStep          = input.bool(_OncePerStep,        "Only take first break-out of each " + str.lower(_AbbName),       group = StepGroup, tooltip = _OnlyFirstBreakInfo)
+
+
+// ---------------=-- BOX, LINES AND LABELS STYLE SETTINGS ------------------- //
+iLineWidth          = input.int(1,      "Line Width",               group = BoxGroup)
+iBorderWidth        = input.int(1,      "Border Width",             group = BoxGroup)
+iBGTransp           = input.int(75,     "Background Transparency",  group = BoxGroup)
+iBorderTransp       = input.int(75,     "Border Transparency",      group = BoxGroup)
+iLabelTransp        = input.int(60,     "Label Transparency",       group = BoxGroup)
+iVITransp           = input.int(70,     "VI Transparency",          group = BoxGroup, tooltip = "Transparency value for all types of volume imbalances.")
+iClusterTransp      = input.int(88,     "Cluster Transparency",     group = BoxGroup, tooltip = "This applied to any kind of cluster, such as re-balanced vibs, drc clusters")
+
+
+// -------------------- WATERMARK -------------------- //
+bTitle              = input.bool(true, "", group = WatermarkGroup, inline = "title")
+title               = input.string(_WATERMARK_TIT,    "",       group = WatermarkGroup, inline = "title")
+c_title             = input.color(color.new(cBear, 20), "",           group = WatermarkGroup, inline = "title")
+s_title             = input.string("large", "",                           options = ["tiny", "small", "normal", "large", "huge", "auto"], group = WatermarkGroup, inline = "title")
+
+bSubtitle           = input.bool(true, "", group = WatermarkGroup, inline = "subtitle")
+subtitle            = input.string(_WATERMARK_SUB,              "",       group = WatermarkGroup, inline = "subtitle")
+c_subtitle          = input.color(cStandart,                    "",       group = WatermarkGroup, inline = "subtitle")
+s_subtitle          = input.string("small",                     "",       options = ["tiny", "small", "normal", "large", "huge", "auto"], group = WatermarkGroup, inline = "subtitle")
+
+
+// ------------------ MISCELENIOUS ------------------ //
+iDaySeparators      = input.bool(true, "New Trading Day Separators", group = MiscGroup, inline = "DAY SEPARATORS", tooltip = "Marks the market re-open for each day")
+iDisplayLabels      = input.bool(true, "Show Labels?", group = MiscGroup, inline = "label")
+iLabelSize          = input.string(_SMALL, "", options = [_TINY, _SMALL, _NORMAL], group = MiscGroup, inline = "label")
+iShowStats          = input.bool(true, "DR Statistics", group = MiscGroup, inline = "STATS")
+iStatCond           = input.string("Close", "", options = ["Wick", "Close"],  group = MiscGroup, inline = "STATS", tooltip = "Close - Will check if close values violate DR levels.\nWick - Will check if wicks violate DR levels instead of close.\n\nChanging between the two calculation methods and observing the percentages can indicate which session is the `wickiest`.")
+
+// ------------------ SIGNAL SYMBOL SETTINGS ------------------ //
+
+iOPOSignals = false
+iAlternating = false
+
+if _EXPERIMENTAL_ON
+    iOPOSignals           := input.bool(_OPOSignals,         "Opposing Average Price Signals",               group = SignalsGroup, tooltip = _OPOSignalInfo)
+    iAlternating          := input.bool(false,               "Alternating?",                                 group = SignalsGroup, tooltip = "If selected, will print only one signal before an opposite signal")
+
+iSignalTimeframe           = input.timeframe("1",              "Signal Timeframe",                             group = SignalsGroup, tooltip = "If timeframe is selected, " + _AbbName + " signals will only print for that selected timeframe.\n\nDefault: Chart")
+iSignalSize                = input.string(_TINY,             "Size", options = [_TINY, _SMALL, _NORMAL],     group = SignalsGroup)
+
+
+// ------------------ DEVELOPMENT ------------------ //
+devmode                     = input.bool(false, "DEV Mode", group = "DEVELOPMENT")
+test                        = input.bool(false, "Value testing label", group = "DEVELOPMENT")
+
+//////////////////////////////////////////////////////////////////
+//                         FUNCTIONS                            //
+//////////////////////////////////////////////////////////////////
+
+// *** Can an indicator paint anything
+canPaint() =>
+    not(iLOCKOUT)
+
+
+
+// ------------------------ FRACTALS -------------------------- //
+
+useFractals() => 
+    if timeframe.period == iTimeframe or iTimeframe == ""
+        true
+    else 
+        false
+
+
+
+
+// ------------------------- DR/IDR --------------------------- //
+
+
+IsSession(_session) => 
+    timeinrange(timeframe.period, _session) and canPaint()
+
+inLondonRange() => 
+    IsSession(DR.getRangeTime(iODRTime)) and iODR
+
+inLondonExtend() => 
+    IsSession(iODRTime) and not inLondonRange() and iODR
+
+inTokyoRange() => 
+    IsSession(DR.getRangeTime(iADRTime)) and iADR
+
+inTokyoExtend() => 
+    IsSession(iADRTime) and not inTokyoRange() and iADR
+
+inNewYorkRange() => 
+    IsSession(DR.getRangeTime(iRDRTime)) and iRDR
+
+inNewYorkExtend() => 
+    IsSession(iRDRTime) and not inNewYorkRange() and iRDR
+
+isLondon() => 
+    inLondonRange() or inLondonExtend() and iODR
+
+isTokyo() =>
+    inTokyoRange() or inTokyoExtend() and iADR
+
+isNewYork() => 
+    inNewYorkRange() or inNewYorkExtend() and iRDR
+
+isDeadZone() => 
+    IsSession(iDeadZoneTime) and iDeadZone
+
+inSession() =>
+    isLondon() or isTokyo() or isNewYork()
+
+inRange() => 
+    inLondonRange() or inTokyoRange() or inNewYorkRange()
+
+inExtend() =>   
+    inLondonExtend() or inTokyoExtend() or inNewYorkExtend()
+
+enterSession() =>
+    inSession() and not inSession()[1]
+
+leaveSession() =>
+    not inSession() and inSession()[1]
+
+enterExtend() => 
+    inSession() and not inRange() and inRange()[1] and inExtend()
+
+
+NewBox(string _name, color _color = color.black) => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cBearBox, iBGTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid, text = _name, text_halign = text.align_center, text_valign = text.align_top, text_color = color.new(_color, iLabelTransp))
+
+NewDRBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cBearBox, iBGTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewRetraceBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cRetracement, iBorderTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewExtendBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cOpen, iBorderTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewTimeLine(_time, _color, _style, float _high = high, float _low = low) =>
+    line.new(_time, _low, _time, _high,  xloc.bar_time, extend.both, _color, _style, iLineWidth)
+
+
+var line[]  _STD_LINES    = array.new_line()
+var line[]  _STD_iLINES   = array.new_line()
+var float[] _STD_LEVELS   = array.new_float()
+var label[] _STD_LABELS   = array.new_label()
+
+var float RetracementA      = na
+var float RetracementB      = na
+var float RetracementAA     = na
+var float RetracementBB     = na
+
+var float ExtensionA        = na
+var float ExtensionB        = na
+
+
+var float   regidrlow             = na
+var float   regidrhigh            = na
+var float   sessionHigh           = na
+var float   sessionLow            = na
+var int     stdLinesStopTime      = na
+
+
+NewDRLine()   => 
+    LB.NewLine(iDR ? iCDR : na, SWITCH_STYLE(iDRLineStyle))
+
+NewWDRLine()   => 
+    line.new(na, na, na, na, xloc=xloc.bar_time, color=iWDR ? iCWDR : na, style=SWITCH_STYLE(iMidLineStyle), width=iLineWidth)
+
+NewIDRLine()  => 
+    LB.NewLine(iIDR ? iCIDR : na, SWITCH_STYLE(iIDRLineStyle))
+
+NewMiddleLine()   => 
+    LB.NewLine(iMid ? iCMid : na, SWITCH_STYLE(iMidLineStyle)) 
+
+NewOpenLine()   => 
+    LB.NewLine(iOpen ? iCOpen : na, SWITCH_STYLE(iOpenLineStyle)) 
+
+NewCloseLine() => 
+    LB.NewLine(iClose ? iCClose : na, SWITCH_STYLE(iCloseLineStyle)) 
+
+NewSDLine()   => LB.NewLine(iSTDLineColor, SWITCH_STYLE(iSTDLineStyle)) 
+
+NewFIBLine() => 
+    LB.NewLine(iCFIB, SWITCH_STYLE(iFIBStyle)) 
+
+DrawSTDLine(_fromTime, _toTime, _level, float _stdLabelValue = na, bool _on_left_side = false) =>
+    int label_time = na
+    label_time := _on_left_side ? _fromTime : _toTime
+    if not na(_level)
+        if not array.includes(_STD_LEVELS, _level)
+            array.push(_STD_LEVELS, _level)
+            L = LB.MoveLine(NewSDLine(), _fromTime, _level, _toTime)
+            array.push(_STD_LINES, L)
+            if iSTDLabels
+                array.push(_STD_LABELS, LB.MoveLabel(LB.NewLabel(iSTDLineColor, color(na), SWITCH_SIZE(iLabelSize), _on_left_side ? text.align_left : text.align_right), label_time, _level, str.format('{0}',_stdLabelValue)))
+
+
+DrawSTDLines(_fromTime, _toTime, bool _clear = false, bool _upside = false) =>
+    var float   stdStepFactor               = 0.5
+    var float   stdStepFactorInternal       = 0.1
+    var float   stdStepInternal             = na
+    var float   stdStep                     = na
+    var float   stdLevel                    = na
+    var float   stdLabelValue               = na
+    var int     nrLevels                    = na
+    var int     nrLevelsPos                 = na
+    var int     nrLevelsNeg                 = na
+    var float   retrace_a                   = na
+    var float   retrace_b                   = na
+    var float   retrace_aa                  = na
+    var float   retrace_bb                  = na
+    var float   extend_a                    = na
+    var float   extend_b                    = na 
+
+    if array.size(_STD_LEVELS) > _STD_LEVELS_LIMIT
+        array.clear(_STD_LEVELS)
+
+
+    if not iSTDAll and array.size(_STD_LEVELS) > 0 and _clear
+        // If we don't need to show all the lines, delete them each time we clear. If we do need to show all the previous lines, don't delete them.
+        for tmpIndex = 0 to array.size(_STD_LINES)-1
+            line.delete(array.get(_STD_LINES, tmpIndex))
+            if iSTDLabels
+                label.delete(array.get(_STD_LABELS, tmpIndex))
+    
+        array.clear(_STD_LEVELS)
+        array.clear(_STD_LINES)
+        if iSTDLabels
+            array.clear(_STD_LABELS)
+
+
+    stdStep := math.abs(regidrhigh-regidrlow)  * stdStepFactor
+
+    if stdStep != 0 and iSTDLines
+
+        nrLevelsPos := iSTDLinePositive
+        nrLevelsNeg := iSTDLineNegative
+
+        // Positive lines
+        if nrLevelsPos >= 1
+            for cnt = 1 to nrLevelsPos
+                stdLevel      := regidrhigh + (cnt * stdStep)
+                stdLabelValue := cnt * stdStepFactor
+                DrawSTDLine(_fromTime, _toTime, stdLevel, stdLabelValue, false)
+
+        // Negative lines
+        if nrLevelsNeg >= 1
+            for cnt = 1 to nrLevelsNeg
+                stdLevel      := regidrlow - (cnt * stdStep)
+                stdLabelValue := cnt * (-stdStepFactor)
+                DrawSTDLine(_fromTime, _toTime, stdLevel, stdLabelValue, false)
+
+
+
+        stdStepInternal := math.abs(regidrhigh-regidrlow)  * stdStepFactorInternal
+
+        for cnt = 0 to 10
+            stdLevel      := _upside ? regidrhigh - (cnt * stdStepInternal) : regidrlow + (cnt * stdStepInternal)
+            stdLabelValue := cnt * (-1 * stdStepFactorInternal)
+
+
+            // Push out price levels if retracement is matching
+            if stdLabelValue == retrace_begin
+                retrace_a := stdLevel
+
+            // Push out price levels if retracement is matching
+            if stdLabelValue == retrace_begin2
+                retrace_aa := stdLevel
+
+            if stdLabelValue == retrace_end
+                retrace_b := stdLevel
+
+            if stdLabelValue == retrace_end2
+                retrace_bb := stdLevel
+            // end
+
+            DrawSTDLine(_fromTime, _toTime, stdLevel, stdLabelValue, false)
+
+
+
+        // Positive lines
+        if nrLevelsPos >= 1 and DRHighBrk
+            for cnt = 1 to (nrLevelsPos * 10) / 2
+                stdLevel      := regidrhigh + (cnt * stdStepInternal)
+                stdLabelValue := cnt * stdStepFactorInternal
+
+                // Push out price levels if extension is matching
+                if stdLabelValue == extension_begin
+                    extend_a := stdLevel
+
+                if stdLabelValue == extension_end
+                    extend_b := stdLevel
+
+
+                if stdLabelValue == retrace_begin
+                    retrace_a := stdLevel
+
+                // Push out price levels if retracement is matching
+                if stdLabelValue == retrace_begin2
+                    retrace_aa := stdLevel
+
+                if stdLabelValue == retrace_end
+                    retrace_b := stdLevel
+
+                if stdLabelValue == retrace_end2
+                    retrace_bb := stdLevel
+
+
+
+                // end
+
+        // Negative lines
+        if nrLevelsNeg >= 1 and DRLowBrk
+            for cnt = 1 to (nrLevelsNeg * 10) / 2
+                stdLevel      := regidrlow - (cnt * stdStepInternal)
+                stdLabelValue := cnt * stdStepFactorInternal
+
+                // Push out price levels if extension is matching
+                if stdLabelValue == extension_begin
+                    extend_a := stdLevel
+
+                if stdLabelValue == extension_end
+                    extend_b := stdLevel
+
+                if stdLabelValue == retrace_begin
+                    retrace_a := stdLevel
+
+                // Push out price levels if retracement is matching
+                if stdLabelValue == retrace_begin2
+                    retrace_aa := stdLevel
+
+                if stdLabelValue == retrace_end
+                    retrace_b := stdLevel
+
+                if stdLabelValue == retrace_end2
+                    retrace_bb := stdLevel
+                // end
+
+
+    [retrace_a, retrace_b, retrace_aa, retrace_bb, extend_a, extend_b]
+
+
+//////////////////////////////////////////////////////////////////
+//                       CALCULATIONS                           //
+//////////////////////////////////////////////////////////////////
+
+// ------------------------ FRACTALS --------------------------- //
+[Open, High, Low, Close] = request.security(syminfo.tickerid, iTimeframe, [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_on)
+
+
+if barstate.isfirst
+    UseDRTimeframe := timeframe.in_seconds(_DRTimeframe) < 360
+    
+// ------------------------- DR/IDR --------------------------- //
+
+[m5_open, m5_high, m5_low, m5_close] = request.security(syminfo.tickerid, _DRTimeframe, [open, high, low, close], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off)
+[m5_open2, m5_high2, m5_low2, m5_close2] = request.security(syminfo.tickerid, _DRTimeframe, [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off)
+
+open_value  = UseDRTimeframe ? m5_open : open
+high_value  = UseDRTimeframe ? m5_high : high
+low_value   = UseDRTimeframe ? m5_low : low
+close_value = UseDRTimeframe ? m5_close : close
+
+
+
+
+//@function Calculates LOWESS (Locally Weighted Scatterplot Smoothing)
+//@param src (float)    Source series
+//@param length (int)   Lookback period
+//@returns (float)      LOWESS value
+lowess(src, length) =>
+    sum_w = 0.0
+    sum_wx = 0.0
+    sum_wy = 0.0
+    for i = 0 to length - 1
+        w = math.pow(1 - math.pow(i / length, 3), 3)
+        sum_w += w
+        sum_wx += w * i
+        sum_wy += w * src[i]
+    a = sum_wy / sum_w
+    b = sum_wx / sum_w
+    a + b / (length - 1) / 2000
+
+
+//@function Calculates Modified Adaptive Gaussian Moving Average
+//@param src (float) Source series
+//@param length (int) Lookback period
+//@returns [float, float] Gaussian MA and smoothed Gaussian MA
+GaussianMA(src, length)=>
+    h_l                = array.new<float>(length)
+
+    float gma          = 0.0
+    float sumOfWeights = 0.0
+    float sigma        = (ta.atr(length) + ta.stdev(close, length)) / 2  // Volatility adaption
+    float highest      = 0.0
+    float lowest       = 0.0
+    float smoothed     = 0.0
+
+    for i = 0 to length - 1
+        h_l.push(close[i])
+        highest      := h_l.max()
+        lowest       := h_l.min()
+        weight        = math.exp(-math.pow(((i - (length - 1)) / (2 * sigma)), 2) / 2)
+        value         = math.max(highest[i], highest) + math.min(lowest[i], lowest)
+        gma          := gma + (value * weight)
+        sumOfWeights += weight
+
+    gma := (gma / sumOfWeights) / 2
+
+    smoothed := lowess(gma, 10)
+
+    [gma, smoothed]
+
+
+
+
+// UpFractal
+bool upflagDownFrontier = true
+bool upflagUpFrontier0 = true
+bool upflagUpFrontier1 = true
+bool upflagUpFrontier2 = true
+bool upflagUpFrontier3 = true
+bool upflagUpFrontier4 = true
+
+for i = 1 to iStepSensitivity
+    upflagDownFrontier := upflagDownFrontier and (high[iStepSensitivity-i] < high[iStepSensitivity])
+    upflagUpFrontier0 := upflagUpFrontier0 and (high[iStepSensitivity+i] < high[iStepSensitivity])
+    upflagUpFrontier1 := upflagUpFrontier1 and (high[iStepSensitivity+1] <= high[iStepSensitivity] and high[iStepSensitivity+i + 1] < high[iStepSensitivity])
+    upflagUpFrontier2 := upflagUpFrontier2 and (high[iStepSensitivity+1] <= high[iStepSensitivity] and high[iStepSensitivity+2] <= high[iStepSensitivity] and high[iStepSensitivity+i + 2] < high[iStepSensitivity])
+    upflagUpFrontier3 := upflagUpFrontier3 and (high[iStepSensitivity+1] <= high[iStepSensitivity] and high[iStepSensitivity+2] <= high[iStepSensitivity] and high[iStepSensitivity+3] <= high[iStepSensitivity] and high[iStepSensitivity+i + 3] < high[iStepSensitivity])
+    upflagUpFrontier4 := upflagUpFrontier4 and (high[iStepSensitivity+1] <= high[iStepSensitivity] and high[iStepSensitivity+2] <= high[iStepSensitivity] and high[iStepSensitivity+3] <= high[iStepSensitivity] and high[iStepSensitivity+4] <= high[iStepSensitivity] and high[iStepSensitivity+i + 4] < high[iStepSensitivity])
+flagUpFrontier = upflagUpFrontier0 or upflagUpFrontier1 or upflagUpFrontier2 or upflagUpFrontier3 or upflagUpFrontier4
+
+upFractal = (upflagDownFrontier and flagUpFrontier)
+
+
+// downFractal
+bool downflagDownFrontier = true
+bool downflagUpFrontier0 = true
+bool downflagUpFrontier1 = true
+bool downflagUpFrontier2 = true
+bool downflagUpFrontier3 = true
+bool downflagUpFrontier4 = true
+
+for i = 1 to iStepSensitivity
+    downflagDownFrontier := downflagDownFrontier and (low[iStepSensitivity-i] > low[iStepSensitivity])
+    downflagUpFrontier0 := downflagUpFrontier0 and (low[iStepSensitivity+i] > low[iStepSensitivity])
+    downflagUpFrontier1 := downflagUpFrontier1 and (low[iStepSensitivity+1] >= low[iStepSensitivity]and low[iStepSensitivity+i + 1] > low[iStepSensitivity])
+    downflagUpFrontier2 := downflagUpFrontier2 and (low[iStepSensitivity+1] >= low[iStepSensitivity] and low[iStepSensitivity+2] >= low[iStepSensitivity] and low[iStepSensitivity+i + 2] > low[iStepSensitivity])
+    downflagUpFrontier3 := downflagUpFrontier3 and (low[iStepSensitivity+1] >= low[iStepSensitivity] and low[iStepSensitivity+2] >= low[iStepSensitivity] and low[iStepSensitivity+3] >= low[iStepSensitivity] and low[iStepSensitivity+i + 3] > low[iStepSensitivity])
+    downflagUpFrontier4 := downflagUpFrontier4 and (low[iStepSensitivity+1] >= low[iStepSensitivity] and low[iStepSensitivity+2] >= low[iStepSensitivity] and low[iStepSensitivity+3] >= low[iStepSensitivity] and low[iStepSensitivity+4] >= low[iStepSensitivity] and low[iStepSensitivity+i + 4] > low[iStepSensitivity])
+flagDownFrontier = downflagUpFrontier0 or downflagUpFrontier1 or downflagUpFrontier2 or downflagUpFrontier3 or downflagUpFrontier4
+
+downFractal = (downflagDownFrontier and flagDownFrontier)
+bar = bar_index
+
+var float highFrac = na
+var float lowFrac = na
+
+lowFrac     := downFractal ? low[iStepSensitivity] : lowFrac[1]
+highFrac    := upFractal ? high[iStepSensitivity] : highFrac[1]
+
+
+var int StairOffset = iStepSensitivity - 1
+var Ceiling   = 0.0
+var Floor     = 0.0
+
+if useFractals()
+    Ceiling         := highFrac
+    Floor           := lowFrac
+    StairOffset     := 0
+else 
+    Ceiling         := High
+    Floor           := Low
+
+Delta      = (Ceiling + Floor) / 2
+
+
+
+plot(Ceiling, "Top " + _AbbName, color = cCeiling, linewidth = 1, style = plot.style_steplinebr, offset = StairOffset, display = display.none)
+plot(Floor, "Bottom " + _AbbName, color = cFloor, linewidth = 1, style = plot.style_steplinebr, offset = StairOffset, display = display.none)
+plot(Delta, "Delta " + _AbbName, color = cDelta, linewidth = 1, style = plot.style_steplinebr, offset = StairOffset, display = display.none)
+
+
+
+
+
+
+
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////
+//                         FUNCTIONS                            //
+//////////////////////////////////////////////////////////////////
+
+ma(type, src, len) =>
+    MA_JMA_Power = 3
+    MA_JMA_Phase = 3
+    MA_KIJUN_Div = 1
+
+    float result = 0
+    if type=="TMA"
+        result := ta.sma(ta.sma(src, math.ceil(len / 2)), math.floor(len / 2) + 1)
+    if type=="LSMA"
+        result := ta.linreg(src, len, 0)
+    if type=="SMA" // Simple
+        result := ta.sma(src, len)
+    if type=="EMA" // Exponential
+        result := ta.ema(src, len)
+    if type=="DEMA" // Double Exponential
+        e = ta.ema(src, len)
+        result := 2 * e - ta.ema(e, len)
+    if type=="TEMA" // Triple Exponential
+        e = ta.ema(src, len)
+        result := 3 * (e - ta.ema(e, len)) + ta.ema(ta.ema(e, len), len)
+    if type=="WMA" // Weighted
+        result := ta.wma(src, len)
+    if type=="VAMA" // Volatility Adjusted
+        // Can be as user input if desired later on
+        volatility_lookback = 10
+        
+        /// Copyright © 2019 to present, Joris Duyck (JD)
+        mid=ta.ema(src,len)
+        dev=src-mid
+        vol_up=ta.highest(dev,volatility_lookback)
+        vol_down=ta.lowest(dev,volatility_lookback)
+        result := mid+math.avg(vol_up,vol_down)
+    if type=="HMA" // Hull
+        result := ta.wma(2 * ta.wma(src, len / 2) - ta.wma(src, len), math.round(math.sqrt(len)))
+    if type=="JMA" // Jurik
+        /// Copyright © 2018 Alex Orekhov (everget)
+        /// Copyright © 2017 Jurik Research and Consulting.
+        phaseRatio = float(MA_JMA_Phase) < -100 ? 0.5 : float(MA_JMA_Phase) > 100 ? 2.5 : float(MA_JMA_Phase) / 100 + 1.5
+        beta = 0.45 * (len - 1) / (0.45 * (len - 1) + 2)
+        alpha = math.pow(beta, MA_JMA_Power)
+        jma = 0.0
+        e0 = 0.0
+        e0 := (1 - alpha) * src + alpha * nz(e0[1])
+        e1 = 0.0
+        e1 := (src - e0) * (1 - beta) + beta * nz(e1[1])
+        e2 = 0.0
+        e2 := (e0 + phaseRatio * e1 - nz(jma[1])) * math.pow(1 - alpha, 2) + math.pow(alpha, 2) * nz(e2[1])
+        jma := e2 + nz(jma[1])
+        result := jma
+
+    if type == "LOWESS"
+        [gma, smoothed] = GaussianMA(iMA_Source, iMA_Length)
+        result := smoothed
+    if type=="Kijun v2"
+        kijun = math.avg(ta.lowest(len), ta.highest(len))//, (open + close)/2)
+        conversionLine = math.avg(ta.lowest(len/MA_KIJUN_Div), ta.highest(len/MA_KIJUN_Div))
+        delta = (kijun + conversionLine)/2
+        result :=delta
+    if type=="McGinley"
+        mg = 0.0
+        emaa = ta.ema(src, len)
+        mg := na(mg[1]) ? emaa : mg[1] + (src - mg[1]) / (len * math.pow(src/mg[1], 4))
+        result :=mg
+    result
+
+
+RSI = math.min(100, math.max(-100,(ta.rsi(iMA_Source, 14) - 50) * 4 ))
+MOVING_AVERAGE = ma(iMA_Type, iMA_Source, iMA_Length)
+
+
+
+plot(MOVING_AVERAGE, "Moving Average", color = RSI > 0 ? cBull : cBear, linewidth = 2, display = display.none)
+
+
+
+var box[] _WDR = array.new_box()
+var float WDR_Mid = na
+var line WDRLine = na
+
+
+if array.size(_WDR) > 0
+    for i = array.size(_WDR) - 1 to 0 by 1
+        _box = array.get(_WDR, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        box.set_right(_box, bar_index + 1)
+
+if array.size(_WDR) > 1
+    box.delete(array.shift(_WDR))
+
+
+
+
+// Bar ID of DR open
+var int OpenBar         = na
+
+// Weekly DR
+var box WDR             = na
+
+
+// var bool ADR_Broken = false
+// var bool ADR_False = false
+// var float ADR_BreakTime = na
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+f_timestrToHM(_timeStr) =>
+    var int     hourInt   = na
+    var int     minuteInt = na
+    if str.length(_timeStr) == 4
+        hourInt   := int(str.tonumber(str.substring(_timeStr, 0, 2)))
+        minuteInt := int(str.tonumber(str.substring(_timeStr, 2, 4)))
+    [hourInt, minuteInt]
+
+f_sessionTime(_session, _timezone=syminfo.timezone, _part) =>
+    var int ts = na
+    if str.length(_session) == 9 and (_part == 0 or _part == 1)
+        arraySessionSplit = str.split(_session, '-')
+        timeStrTo          = array.get(arraySessionSplit, _part)
+        [hourTo, minuteTo] = f_timestrToHM(timeStrTo)
+        ts := timestamp(_timezone, year, month, dayofmonth, hourTo, minuteTo)
+    ts
+
+f_sessionStartTime(_session, _timezone=syminfo.timezone) => f_sessionTime(_session, _timezone, 0)
+f_sessionStopTime(_session, _timezone=syminfo.timezone)  => f_sessionTime(_session, _timezone, 1)
+
+
+
+// Function to push new box into the respective array
+AddDRCluster(bool condition, color _color, string _name, _array) =>
+    if condition
+        box _a = NewBox(_name, _color)
+        if array.size(_array) > int(iDRClusterDays * 6)
+            box.delete(array.shift(_array))
+        array.push(_array, _a)
+        _a
+
+
+
+GetCurrentSessionTimestring() =>
+    res = "0000-0000"
+    if isTokyo()
+        res := iADRTime
+    if isLondon()
+        res := iODRTime
+    if isNewYork()
+        res := iRDRTime
+
+    res
+
+
+var box testbox = na
+
+
+var int WDRLineStartTime = na
+var bool DrawMedianRetracement = false
+var bool DrawMedianExtension = false
+
+string DummyHour = "0000"
+var string SESSION_STARTHOUR  = DummyHour
+var string SESSION_RANGEEND   = DummyHour
+var string SESSION_SECONDHOUR = DummyHour
+var string SESSION_END        = DummyHour
+
+color BRUP      = color.teal
+color BRDN      = color.orange
+color BR_MUTE   = #8e8e8e
+
+var color BRUP_ASSIGNED = na
+var color BRDN_ASSIGNED = na
+
+var int CloseLineStart = na
+
+
+if timeframe.isintraday  and timeframe.in_seconds(timeframe.period) <= 360 and not(iLOCKOUT) //and (PCchart.barIsVisible() or not showAllHistory)
+
+
+
+    if array.size(_DRClusters) > 0
+        for i = array.size(_DRClusters) - 1 to 0 by 1
+            _box = array.get(_DRClusters, i)
+            _boxLow = box.get_bottom(_box)
+            _boxHigh = box.get_top(_box)
+            _boxRight = box.get_right(_box)
+
+            box.set_right(_box, bar_index + 1)
+
+
+
+
+    if enterSession()
+        SESSION_STARTHOUR   := JHINN.getSessionPart(GetCurrentSessionTimestring(), 0)
+        SESSION_RANGEEND    := DR.getRangeTime(GetCurrentSessionTimestring(), false)
+        SESSION_SECONDHOUR  := DR.getSecondHour(GetCurrentSessionTimestring())
+        SESSION_END         := JHINN.getSessionPart(GetCurrentSessionTimestring(), 1)
+
+        OpenBar             := bar_index
+        OpenPrice           := open_value
+        OpenTime            := time
+
+        sessionHigh         := high_value
+        sessionLow          := low_value
+
+        DRBox               := NewDRBox()
+
+        DRHigh_L            := NewDRLine()
+        DRLow_L             := NewDRLine()
+
+        IDRHigh_L           := NewIDRLine()
+        IDRLow_L            := NewIDRLine()   
+
+        IDRMid_L            := NewMiddleLine()
+
+        OpenPrice_L         := NewOpenLine()
+        ClosePrice_L        := NewCloseLine()
+
+        FIB_L               := NewFIBLine()
+
+
+        RetraceBoxA         := NewRetraceBox()
+        RetraceBoxB         := NewRetraceBox()
+
+        ExtendBox           := NewExtendBox()
+
+         // Initialise Values
+        DRHigh              := high_value
+        DRLow               := low_value
+        IDRHigh             := close_value
+        IDRLow              := close_value
+
+    if inSession()
+        EndTime := time
+
+    if inRange()
+        DRHigh              := math.max(high_value, DRHigh)
+        DRLow               := math.min(low_value, DRLow)
+
+        IDRHigh             := math.max(close_value, IDRHigh)
+        IDRLow              := math.min(close_value, IDRLow)
+
+        IDRMid              := math.avg(IDRHigh, IDRLow)
+
+
+        BoxColor            = OpenPrice < close_value ? color.new(iCBullBox, iBGTransp) : color.new(iCBearBox, iBGTransp)
+        
+        LB.MoveBox(DRBox, OpenTime, IDRHigh, time, IDRLow, color.new(BoxColor, iBorderTransp), BoxColor)
+
+
+    if iFIB and DRBroken
+        iFIBVal := DRLowBrk ? 100 - iFIBVal : iFIBVal
+
+        FIB_PointH = iFIBType == "DR" ? DRHigh : IDRHigh
+        FIB_PointL = iFIBType == "DR" ? DRLow : IDRLow
+
+        FIB := FIB_PointH - (FIB_PointH - FIB_PointL) * iFIBVal / 100
+        LB.MoveLine(FIB_L, OpenTime, FIB, EndTime + 1)
+
+
+    if inRange() or inExtend()
+        // We add 1 to accurately draw lines all the way to the end of the session
+        LB.MoveLine(DRHigh_L, OpenTime, DRHigh, EndTime + 1)
+        LB.MoveLine(DRLow_L, OpenTime, DRLow, EndTime + 1)
+
+        LB.MoveLine(IDRHigh_L, OpenTime, IDRHigh, EndTime + 1)
+        LB.MoveLine(IDRLow_L, OpenTime, IDRLow, EndTime + 1)
+
+        LB.MoveLine(OpenPrice_L, OpenTime, OpenPrice, EndTime + 1)
+
+        LB.MoveLine(IDRMid_L, OpenTime, IDRMid, EndTime + 1)
+
+    if enterExtend()
+        RangeEndTime        := JHINN.toTimestamp(SESSION_RANGEEND)
+        ClosePrice          := close_value[1]
+        CloseLineStart      := time[1]
+
+        stdLinesStopTime    := f_sessionTime(GetCurrentSessionTimestring(), TIMEZONE, 1) + (JHINN.isOvernight(GetCurrentSessionTimestring()) ? ONE_DAY : 0)
+
+
+        // Register values for STD 
+        sessionHigh         := DRHigh
+        sessionLow          := DRLow
+        regidrhigh          := IDRHigh
+        regidrlow           := IDRLow
+
+
+        // Only draw median retracement line if time set is within the given session
+        DrawMedianRetracement := JHINN.isTimeInSession(DR.getExtensionTime(GetCurrentSessionTimestring()), str.tostring(str.substring(iMedianTime, 0, 4)))
+
+        if DrawMedianRetracement and iMedian
+            Retracement_L       := NewTimeLine(f_sessionTime(iMedianTime, TIMEZONE, 0), icRetrace, line.style_solid)
+
+        // Only draw median extension line if time set is within the given session
+        DrawMedianExtension   := JHINN.isTimeInSession(DR.getExtensionTime(GetCurrentSessionTimestring()), str.tostring(str.substring(iMedianTime, 5, 9)))
+        if DrawMedianExtension and iMedian
+            Extension_L         := NewTimeLine(f_sessionTime(iMedianTime, TIMEZONE, 1), icExtend, line.style_solid)
+
+
+
+    // Start drawing Closing Price line
+    // **Offset by one bar by using variable 'CloseLineStart'
+    if inExtend()
+        DRBroken := DRLowBrk or DRHighBrk
+        DRFalse := DRLowBrk and DRHighBrk
+        LB.MoveLine(ClosePrice_L, CloseLineStart, ClosePrice, EndTime + 1)
+
+
+
+
+
+    // ******************************************************************************************************
+    // If we're in the extension section of the session and a brake happens after the first hour, 
+    // we mute the color of the indication symbol
+    // ******************************************************************************************************
+    if inExtend() and not DRHighBrk and close_value > DRHigh
+        DRHighBrkTime := time
+
+        if not DRLowBrk
+            DRFirstBrkTime := time
+
+        if DRHighBrkTime <= JHINN.toTimestamp(SESSION_SECONDHOUR, TIMEZONE)
+            BRUP_ASSIGNED := BRUP
+        else
+            BRUP_ASSIGNED := BR_MUTE
+
+        // Broadcast
+        DRHighBrk := true
+
+    if inExtend() and not DRLowBrk and close_value < DRLow
+        DRLowBrkTime := time
+
+        if not DRHighBrk 
+            DRFirstBrkTime := time
+            
+        if DRLowBrkTime <= JHINN.toTimestamp(SESSION_SECONDHOUR, TIMEZONE)
+            BRDN_ASSIGNED := BRDN
+        else
+            BRDN_ASSIGNED := BR_MUTE
+
+        // Broadcast
+        DRLowBrk := true
+
+
+
+
+
+    if inExtend() and DRBroken
+        if not DRLowBrk and (iStatCond == "Wick" ? low_value < DRLow : close_value < DRLow)
+            DRLowBrk := true
+            DRLowBrkTime := time
+
+        if not DRHighBrk and (iStatCond == "Wick" ? high_value > DRHigh : close_value > DRHigh)
+            DRHighBrk := true
+            DRHighBrkTime := time
+
+    if leaveSession() and isNewYork()[1] and dayofweek(time) == dayofweek.tuesday and iWDR
+        line.delete(WDRLine)
+        WDR := DR.NewWDRBox(bar_index, DRHigh[1], DRLow[1], true, iCWDR, iBorderWidth, iDisplayLabels ? iLabelTransp : 100, _bg_transp = iBGTransp, _border_transp = iBorderTransp)
+        WDRLine := NewWDRLine()
+        WDR_Mid := IDRMid[1]
+        WDRLineStartTime := time
+        array.push(_WDR, WDR)
+
+    if iWDR and not(na(WDRLine))
+        LB.MoveLine(WDRLine, WDRLineStartTime, WDR_Mid, time)
+
+    if inExtend() and DRBroken and iSTDLines
+        [RetraceA, RetraceB, RetraceAA, RetraceBB, ExtendA, ExtendB]    = DrawSTDLines(RangeEndTime, stdLinesStopTime, true, DRHighBrk ? true : false) 
+        if iSTDLines
+            if DRBroken
+                RetracementA := RetraceA
+                RetracementB := RetraceB
+                RetracementAA := RetraceAA
+                RetracementBB := RetraceBB
+
+            ExtensionA   := ExtendA
+            ExtensionB   := ExtendB
+
+    // ADR Stats
+    if not inTokyoExtend() and inTokyoExtend()[1] and DRBroken[1]
+        ADR_Sess += 1
+        if not DRFalse[1]
+            ADR_True_Sess += 1
+
+    // ODR Stats
+    if not inLondonExtend() and inLondonExtend()[1] and DRBroken[1]
+        ODR_Sess += 1
+        if not DRFalse[1]
+            ODR_True_Sess += 1
+
+    // RDR Stats
+    if not inNewYorkExtend() and inNewYorkExtend()[1] and DRBroken[1]
+        RDR_Sess += 1
+        if not DRFalse[1]
+            RDR_True_Sess += 1
+
+
+    // Remove all Standart Deviation lines and label if we're only showing them on one session
+    // rather than all of them. Clearing on entering the session to keep the lines and labels remaining
+    // until the next session, if we need to go back and re-analyse that session.
+    if enterSession() and not(iSTDAll)
+        if array.size(_STD_LEVELS) > 0 
+            for tmpIndex = 0 to array.size(_STD_LINES)-1
+                line.delete(array.get(_STD_LINES, tmpIndex))
+                if iSTDLabels
+                    label.delete(array.get(_STD_LABELS, tmpIndex))
+
+            array.clear(_STD_LEVELS)
+            array.clear(_STD_LINES)
+
+            if iSTDLabels and array.size(_STD_LABELS) > 0
+                array.clear(_STD_LABELS)
+
+
+
+    if leaveSession()
+
+        box = AddDRCluster(iDRClusters, color.new(iCDRClusters, iClusterTransp + 5), "", _DRClusters)
+        LB.MoveBox(box, OpenTime + 1, DRHigh, EndTime, IDRHigh, color.new(iCDRClusters, iClusterTransp + 5), color.new(iCDRClusters, iClusterTransp + 5))
+        box2 = AddDRCluster(iDRClusters, color.new(iCDRClusters, iClusterTransp + 5), "", _DRClusters)
+        LB.MoveBox(box2, OpenTime + 1, DRLow, EndTime, IDRLow, color.new(iCDRClusters, iClusterTransp + 5), color.new(iCDRClusters, iClusterTransp + 5))
+
+        line.delete(Retracement_L)
+        line.delete(Extension_L)
+        box.delete(RetraceBoxA)
+        box.delete(RetraceBoxB)
+        box.delete(ExtendBox)
+        // @TODO: Idea how to get the data out
+        // if isTokyo()[1]
+        //     ADR_False     := DRHighBrk and DRLowBrk
+        //     ADR_Broken    := DRBroken
+        //     ADR_BreakTime := str.tonumber(str.format_time(DRFirstBrkTime, "HHmm", TIMEZONE))
+
+        //     alert("{ADR: { broken: " + str.tostring(ADR_Broken) + ", break_time: " + str.tostring(ADR_False) + ", false_day: " + str.tostring(ADR_False) + " }}")
+        DRFalse         := false
+        DRBroken        := false
+        DRHighBrk       := false
+        DRLowBrk        := false
+        DRFirstBrkTime  := na
+        DRHigh          := na
+        DRLow           := na
+        IDRHigh         := na
+        IDRLow          := na
+
+
+    if inExtend() and DRBroken
+        var int RetraceBoxEndTime       = na
+        var int ExtensionBoxStartTime   = na
+        var int ExtensionBoxStopTime    = na
+
+
+        if not iMedian
+            ExtensionBoxStartTime := RangeEndTime
+            ExtensionBoxStopTime  := stdLinesStopTime
+            RetraceBoxEndTime     := stdLinesStopTime
+        else 
+            if DrawMedianExtension and not DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, TIMEZONE, 1)
+                ExtensionBoxStopTime  := stdLinesStopTime
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, TIMEZONE, 1)
+
+            if DrawMedianExtension and DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, TIMEZONE, 0)
+                ExtensionBoxStopTime  := f_sessionTime(iMedianTime, TIMEZONE, 1)
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, TIMEZONE, 0)
+
+            if not DrawMedianExtension and DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, TIMEZONE, 0)
+                ExtensionBoxStopTime  := stdLinesStopTime
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, TIMEZONE, 0)
+        
+            if not DrawMedianExtension and not DrawMedianRetracement
+                ExtensionBoxStartTime := RangeEndTime
+                ExtensionBoxStopTime  := stdLinesStopTime
+                RetraceBoxEndTime     := stdLinesStopTime
+
+        // Retracement Range Box (Entry & Stop Loss)
+        if iRetrace and iSTDLines
+            LB.MoveBox(RetraceBoxA, RangeEndTime, RetracementA, RetraceBoxEndTime, RetracementB, color.new(icRetrace, 75), color.new(icRetrace, 75))
+        
+        if iRetrace2 and iSTDLines
+            LB.MoveBox(RetraceBoxB, RangeEndTime, RetracementAA, RetraceBoxEndTime, RetracementBB, color.new(icRetrace2, 75), color.new(icRetrace2, 75))
+
+        // Extension Range Box (Target)
+        if iExtend and iSTDLines
+            LB.MoveBox(ExtendBox, ExtensionBoxStartTime, ExtensionA, ExtensionBoxStopTime, ExtensionB, color.new(icExtend, 75), color.new(icExtend, 75))
+
+
+
+
+    if enterExtend()
+        // @label
+        if test // end time - median time
+            
+            
+            myLabel = label.new(x=bar_index, y=high, color=#1b411e, textcolor = #dbffcb, style=label.style_label_up, size=size.small, text = "====================\nRANGE: " + DR.getSecondHour(GetCurrentSessionTimestring()))
+            label.set_yloc(id=myLabel, yloc=yloc.belowbar)
+
+
+
+
+falseBarCondition = DRHighBrk and time == DRHighBrkTime and DRLowBrk or DRLowBrk and time == DRLowBrkTime and DRHighBrk
+
+
+
+
+
+
+
+// ********* VOLUME IMBALANCES *********
+var box[] _uvis     = array.new_box()
+var box[] _dvis     = array.new_box()
+
+// *** MARKET OPEN VOLUME IMBALANCES ***
+var box[] _uivis    = array.new_box()
+var box[] _divis    = array.new_box()
+
+// ********** RANGE LIMITERS ***********
+var box[] _ulmtr    = array.new_box()
+var box[] _dlmtr    = array.new_box()
+
+// ****** SPECIALS (TRAMPOLINE) *******
+var box[] _uspcl    = array.new_box()
+var box[] _dspcl    = array.new_box()
+
+// ******* STANDART IMBALANCES *******
+var box[] _ustnd    = array.new_box()
+var box[] _dstnd    = array.new_box()
+
+// *********** PRICE GAPS *************
+var box[] _ugap     = array.new_box()
+var box[] _dgap     = array.new_box()
+
+// FUNCTIONS
+newGap(color _color, string _name, bool _isBull = false) =>
+    LB.NewBox(
+      _left = bar_index-1,
+      _top = _isBull ? math.min(open, close) : math.max(open, close),
+      _right = bar_index+1,
+      _bottom = _isBull ? math.max(close[1], open[1]) : math.min(close[1], open[1]),
+      _name = iDisplayLabels ? _name : (_isBull ? '+' : '-'), 
+      _bg_color = color.new(_color, iVITransp), 
+      _border_color = color.new(_color, iVITransp), 
+      _border_width = 1, 
+      _border_style = line.style_solid, 
+      _text_halign = text.align_right, 
+      _text_valign = text.align_center, 
+      _text_size = SWITCH_SIZE(iLabelSize), 
+      _text_color = _color, 
+      _xloc = xloc.bar_index)
+
+newImb(color _color, string _name, bool _isBull = false) =>
+    LB.NewBox(
+      _left = bar_index-1,
+      _top = open,
+      _right = bar_index+1,
+      _bottom = close[1],
+      _name = iDisplayLabels ? _name : (_isBull ? '+' : '-'), 
+      _bg_color = color.new(_color, iVITransp), 
+      _border_color = color.new(_color, iVITransp), 
+      _border_width = 1, 
+      _border_style = line.style_solid, 
+      _text_halign = text.align_right, 
+      _text_valign = text.align_center, 
+      _text_size = SWITCH_SIZE(iLabelSize), 
+      _text_color = _color, 
+      _xloc = xloc.bar_index)
+
+// Function to push new box into the respective array
+pushBoxIfCondition(bool condition, color _color, string _name, _array, bool _bull = false, int _limit = 0, bool _gap = false) =>
+    if condition and not(iLOCKOUT)
+        box _a = _gap ? newGap(_color, _name, _bull) : newImb(_color, _name, _bull)
+        if array.size(_array) > int(_limit < 1 ? _MAX_VIS_PER_TYPE : _limit)
+            box.delete(array.shift(_array))
+        array.push(_array, _a)
+        // Return box
+        _a
+
+
+// ********************** BASIC VOLUME IMBALANCE (FOUNDATION) ************************ // 
+UP_VIB(index) => C.hasBodyGap(index) and C.wicksTouch(index) and C.isBullFormation(index)
+DN_VIB(index) => C.hasBodyGap(index) and C.wicksTouch(index) and C.isBearFormation(index)
+
+// ********************************* PRICE GAPS ************************************** // 
+UP_GAP(index) => C.hasBodyGap(index) and C.hasWickGap(index) and low[index] > high[index + 1]
+DN_GAP(index) => C.hasBodyGap(index) and C.hasWickGap(index) and high[index] < low[index + 1]
+
+pushBoxIfCondition(UP_GAP(0) and iGAP and JHINN.isNewTradingDay(), icGAP, "GAP+", _ugap, true, 50, true)
+pushBoxIfCondition(DN_GAP(0) and iGAP and JHINN.isNewTradingDay(), icGAP, "GAP-", _dgap, false, 50, true)
+
+
+// **************************** RANGE LIMITER IMBALANCE ****************************** // 
+UP_LMTR(index) => UP_VIB(index) and high[index + 1] == open[index] and low[index] != close[index + 1]
+DN_LMTR(index) => DN_VIB(index) and low[index + 1] == open[index] and high[index] != close[index + 1]
+
+pushBoxIfCondition(UP_LMTR(0) and iLimiter, icLimiter, _SYM_LIMITER, _ulmtr, true)
+pushBoxIfCondition(DN_LMTR(0) and iLimiter, icLimiter, _SYM_LIMITER, _ulmtr, false)
+
+
+// ****************************** SPECIAL IMBALANCE ********************************** // 
+UP_SPCL(index) => UP_VIB(index) and not(UP_LMTR(index)) and low[index] == close[index + 1] and high[index + 1] != open[index]
+DN_SPCL(index) => DN_VIB(index) and not(DN_LMTR(index)) and high[index] == close[index + 1] and low[index + 1] != open[index]
+
+pushBoxIfCondition(UP_SPCL(0) and iSpecial, icSpecial, _SYM_SPECIAL, _uspcl, true)
+pushBoxIfCondition(DN_SPCL(0) and iSpecial, icSpecial, _SYM_SPECIAL, _uspcl, false)
+
+// ***************************** STANDART IMBALANCE ********************************* // 
+UP_STND(index) => UP_VIB(index) and low[index] == close[index + 1] and high[index + 1] == open[index]
+DN_STND(index) => DN_VIB(index) and high[index] == close[index + 1] and low[index + 1] == open[index]
+
+pushBoxIfCondition(UP_STND(0) and iStandart, icStandart, _SYM_STANDART, _ustnd, true)
+pushBoxIfCondition(DN_STND(0) and iStandart, icStandart, _SYM_STANDART, _dstnd, false)
+
+// ************************** MAGNETIC VOLUME IMBALANCE ***************************** // 
+U_VIB(index) => UP_VIB(index) and not(UP_LMTR(index)) and not(UP_SPCL(index)) and not(UP_STND(index))
+D_VIB(index) => DN_VIB(index) and not(DN_LMTR(index)) and not(DN_SPCL(index)) and not(DN_STND(index))
+
+pushBoxIfCondition(U_VIB(0) and iVI, icVI, _SYM_VIB, _uvis, true)
+pushBoxIfCondition(D_VIB(0) and iVI, icVI, _SYM_VIB, _dvis, false)
+
+
+// ************************ CHECK MARKET OPEN IMBALANCES AND HIGHLIGHT THEM THROUGHOUT THE DAY *************************** // 
+if JHINN.isNewTradingDay()
+
+    if array.size(_divis) > 0
+        for i = array.size(_divis) - 1 to 0 by 1
+            _box = array.get(_divis, i)
+            box.delete(_box)
+
+    if array.size(_uivis) > 0
+        for i = array.size(_uivis) - 1 to 0 by 1
+            _box = array.get(_uivis, i)
+            box.delete(_box)
+
+    // ************** IS IT A VOLUME IMBALANCE *****************
+    if C.hasBodyGap(0) and high[1] >= low[0] or low[1] <= high[0]
+        if close[0] > close[1]
+            pushBoxIfCondition(JHINN.isNewTradingDay() and C.hasBodyGap(0) and high[1] >= low[0], icVI, _SYM_VIB, _uvis, true, _gap = true)
+            pushBoxIfCondition(JHINN.isNewTradingDay() and C.hasBodyGap(0) and high[1] >= low[0], icVI, "", _uivis, true, _gap = true)
+
+        if close[0] < close[1]
+            pushBoxIfCondition(JHINN.isNewTradingDay() and C.hasBodyGap(0) and low[1] <= high[0], icVI, _SYM_VIB, _dvis, false, _gap = true)
+            pushBoxIfCondition(JHINN.isNewTradingDay() and C.hasBodyGap(0) and low[1] <= high[0], icVI, "", _divis, false, _gap = true)
+
+    // END ****
+
+
+if array.size(_divis) > 0
+    for i = array.size(_divis) - 1 to 0 by 1
+        _box = array.get(_divis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            box.set_text(_box, "")
+            box.set_border_color(_box, na)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_uivis) > 0
+    for i = array.size(_uivis) - 1 to 0 by 1
+        _box = array.get(_uivis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            box.set_text(_box, "")
+            box.set_border_color(_box, na)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+
+
+if array.size(_dvis) > 0
+    for i = array.size(_dvis) - 1 to 0 by 1
+        _box = array.get(_dvis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            if iVIClusters
+                box.set_text(_box, "")
+                box.set_bgcolor(_box, color.new(icCluster, iClusterTransp))
+                box.set_border_color(_box, na)
+            else 
+                box.delete(_box)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_uvis) > 0
+    for i = array.size(_uvis) - 1 to 0 by 1
+        _box = array.get(_uvis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            if iVIClusters
+                box.set_text(_box, "")
+                box.set_bgcolor(_box, color.new(icCluster, iClusterTransp))
+                box.set_border_color(_box, na)
+            else 
+                box.delete(_box)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+
+
+if array.size(_dgap) > 0
+    for i = array.size(_dgap) - 1 to 0 by 1
+        _box = array.get(_dgap, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if not(high >= math.max(_boxHigh, _boxLow)) and bar_index == _boxRight
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_ugap) > 0
+    for i = array.size(_ugap) - 1 to 0 by 1
+        _box = array.get(_ugap, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if not(low <= math.min(_boxHigh, _boxLow)) and bar_index == _boxRight
+            box.set_right(_box, bar_index + 1)
+
+
+
+
+
+if array.size(_ulmtr) > 0
+    for i = array.size(_ulmtr) - 1 to 0 by 1
+        _box = array.get(_ulmtr, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_dlmtr) > 0
+    for i = array.size(_dlmtr) - 1 to 0 by 1
+        _box = array.get(_dlmtr, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_uspcl) > 0
+    for i = array.size(_uspcl) - 1 to 0 by 1
+        _box = array.get(_uspcl, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_dspcl) > 0
+    for i = array.size(_dspcl) - 1 to 0 by 1
+        _box = array.get(_dspcl, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_ustnd) > 0
+    for i = array.size(_ustnd) - 1 to 0 by 1
+        _box = array.get(_ustnd, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_dstnd) > 0
+    for i = array.size(_dstnd) - 1 to 0 by 1
+        _box = array.get(_dstnd, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            box.delete(_box)
+        else
+            box.set_right(_box, bar_index + 1)
+
+
+
+
+
+
+
+
+var float LastStepAnchor    = 0.0
+var float LastSignalType    = 0
+var int   OPO               = 0
+
+
+Buy     := (iMA_Filter ? close > MOVING_AVERAGE : true) and open <= Ceiling and close > Ceiling and RSI > 0 and (iOncePerStep ? LastStepAnchor != Ceiling : true) and (iAlternating ? LastSignalType != 1 : true) and (iRepainting ? true : barstate.isconfirmed) and (timeframe.period == iSignalTimeframe or iSignalTimeframe == "")
+Sell    := (iMA_Filter ? close < MOVING_AVERAGE : true) and open >= Floor and close < Floor and RSI < 0 and (iOncePerStep ? LastStepAnchor != Floor: true) and (iAlternating ? LastSignalType != -1 : true) and (iRepainting ? true : barstate.isconfirmed) and (timeframe.period == iSignalTimeframe or iSignalTimeframe == "")
+
+
+// ----------- UPDATE ANCHORS ------------ //
+if Buy
+    LastStepAnchor := Ceiling
+    LastSignalType := 1
+    OPO            := 0
+
+if Sell
+    LastStepAnchor := Floor
+    LastSignalType := -1
+    OPO            := 0
+
+
+
+bool plottiny   = false
+bool plotsmall  = false
+bool plotnormal  = false
+
+if iSignalSize == _TINY
+    plottiny := true
+    plotsmall := false
+    plotnormal := false
+
+if iSignalSize == _SMALL 
+    plottiny := false
+    plotsmall := true
+    plotnormal := false
+
+if iSignalSize == _NORMAL
+    plottiny := false
+    plotsmall := false
+    plotnormal := true
+
+
+// ------------------- AVERAGE PRICE OPPOSING SIGNALS ------------------- //
+
+AVERAGE_PRICE := (((high[4] + low[4]) / 2) + ((high[3] + low[3]) / 2) + ((high[2] + low[2]) / 2) + ((high[1] + low[1]) / 2) + ((high + low) / 2)) / 5
+
+OPO_Signal_BUY = LastSignalType == 1 and  AVERAGE_PRICE < Delta and OPO != 1 and close <= Delta
+OPO_Signal_BUY := OPO_Signal_BUY and Buy ? false : OPO_Signal_BUY
+
+if OPO_Signal_BUY
+    OPO := 1
+
+OPO_Signal_SELL = LastSignalType == -1 and AVERAGE_PRICE > Delta and OPO != -1 and close >= Delta
+OPO_Signal_SELL := OPO_Signal_SELL and Sell ? false : OPO_Signal_SELL
+
+if OPO_Signal_SELL
+    OPO := -1
+
+
+
+// ADR Data submission to the API
+
+        // @TODO: Idea how to get the data out
+        // if isTokyo()[1]
+        //     ADR_False     := DRHighBrk and DRLowBrk
+        //     ADR_Broken    := DRBroken
+        //     ADR_BreakTime := str.tonumber(str.format_time(DRFirstBrkTime, "HHmm", TIMEZONE))
+
+        //     alert("{ADR: { broken: " + str.tostring(ADR_Broken) + ", break_time: " + str.tostring(ADR_False) + ", false_day: " + str.tostring(ADR_False) + " }}")
+
+
+string WasFalse = DRHighBrk[1] and DRLowBrk[1] ? "true" : "false"
+string DRName = isTokyo()[1] ? "ADR" : isNewYork()[1] ? "RDR" : isLondon()[1] ? "ODR" : "UNKNOWN"
+
+if inSession()[1] and not(inSession())
+    alert("{ " + DRName + ": { False_Day: " + WasFalse + " }}")
+
+
+
+
+
+isHoliday(string _date) =>
+    res = false
+    split = str.split(_date, '/')
+    stamp = timestamp(TIMEZONE, year, math.round(str.tonumber(array.get(split, 0))), math.round(str.tonumber(array.get(split, 1))), 18, 00) - ONE_DAY
+    if array.size(split) == 2
+        res := bool(time >= stamp and time <= stamp + ONE_DAY)
+    res
+
+
+var label l1 =na
+var line hl = na
+// if date1 or date2 or date3 or date4 or date5 or date6 or date7 or date8 or date9 and canPaint()
+//     l1:=label.new(bar_index, high, text='HOLIDAY',textcolor=cLimiter, yloc=yloc.belowbar, style=label.style_none, size = SWITCH_SIZE(iLabelSize), force_overlay = true)
+//     hl := NewTimeLine(time, cLimiter, line.style_solid)
+//     label.delete(l1[1])
+//     line.delete(hl[1])
+
+
+
+bgcolor(
+  isHoliday("11/28") or // Update thanksgiving to 11/26 for 2025
+  isHoliday("01/01") or 
+  isHoliday("01/18") or 
+  isHoliday("02/14") or 
+  isHoliday("02/16") or 
+  isHoliday("05/25") or 
+  isHoliday("07/04") or 
+  isHoliday("09/07") or 
+  isHoliday("12/25") and 
+  canPaint() ? color.new(cLimiter, 50) : na)
+
+
+
+
+//-----------------------------------------------------------------------------}
+//Dashboard
+//-----------------------------------------------------------------------------{
+var table_position = position.bottom_left
+var table_size = size.small
+
+var tb = table.new(table_position, 4, 4
+  , bgcolor = #ffffff
+  , border_color = #eff1fc
+  , border_width = 1
+  , frame_color = #eff1fc
+  , frame_width = 1)
+
+if iShowStats and canPaint()
+
+    tb.cell(0, 0, 'SESSION', text_color = cIDR, text_size = table_size)
+    tb.cell(0, 1, 'ADR (' + str.tostring(ADR_Sess) + ')', text_color = cBull, text_size = table_size)
+    tb.cell(0, 2, 'ODR (' + str.tostring(ODR_Sess) + ')', text_color = cOpen, text_size = table_size)
+    tb.cell(0, 3, 'RDR (' + str.tostring(RDR_Sess) + ')', text_color = cClose, text_size = table_size)
+    
+    tb.cell(1, 0, '%', text_color = cIDR, text_size = table_size)
+    //tb.cell(2, 0, '#', text_color = cIDR, text_size = table_size)
+ 
+    //Size
+    tb.cell(1, 1, str.tostring(ADR_True_Sess / ADR_Sess * 100, format.percent), text_color = cIDR, text_size = table_size)
+    tb.cell(1, 2, str.tostring(ODR_True_Sess / ODR_Sess * 100, format.percent), text_color = cIDR, text_size = table_size)
+    tb.cell(1, 3, str.tostring(RDR_True_Sess / RDR_Sess * 100, format.percent), text_color = cIDR, text_size = table_size)  
+
+    //Content
+    // tb.cell(2, 1, str.tostring(ADR_Sess), text_color = cIDR, text_size = table_size, text_halign = text.align_left)
+    // tb.cell(2, 2, str.tostring(ODR_Sess), text_color = cIDR, text_size = table_size, text_halign = text.align_left)
+    // tb.cell(2, 3, str.tostring(RDR_Sess), text_color = cIDR, text_size = table_size, text_halign = text.align_left)
+
+
+iChecklist = input.bool(false, "Enable Checklist", group = "Checklist")
+iChecklist_Signal = input.bool(false, "Signal Printed", group = "Checklist")
+iChecklist_InterestArea  = input.bool(false, "Interest Area or Rejected", group = "Checklist")
+iChecklist_NoRejectionWick = input.bool(false, "No Wick Rejection", group = "Checklist")
+//-----------------------------------------------------------------------------}
+// Checklist
+//-----------------------------------------------------------------------------{
+var table_position_2 = position.top_right
+var table_size_2 = size.small
+
+var tb2 = table.new(table_position_2, 2, 6
+  , bgcolor = #ffffff
+  , border_color = #eff1fc
+  , border_width = 1
+  , frame_color = #eff1fc
+  , frame_width = 1)
+
+
+if canPaint() and iChecklist
+
+    tb2.cell(0, 0, '-', text_color = cIDR, text_size = table_size_2)
+    tb2.cell(0, 1, DRBroken ? Selected : NotSelected, text_color = cIDR, text_size = table_size_2)
+    tb2.cell(0, 2, inSession() and (DRHighBrk and not(DRLowBrk) or DRLowBrk and not(DRHighBrk)) ? Selected : NotSelected, text_color = cIDR, text_size = table_size_2)
+    tb2.cell(0, 3, iChecklist_Signal ? Selected : NotSelected, text_color = cIDR, text_size = table_size_2)
+    tb2.cell(0, 4, iChecklist_InterestArea ? Selected : NotSelected, text_color = cIDR, text_size = table_size_2)
+    tb2.cell(0, 5, iChecklist_NoRejectionWick ? Selected : NotSelected, text_color = cIDR, text_size = table_size_2)
+
+    tb2.cell(1, 0, 'CHECKLIST', text_color = cIDR, text_size = table_size_2)
+    //tb.cell(2, 0, '#', text_color = cIDR, text_size = table_size_2)
+ 
+    //Size
+    tb2.cell(1, 1, "Direction Confirmed", text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)
+    tb2.cell(1, 2, "No False Day", text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)
+    tb2.cell(1, 3, "Valid Signal", text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)  
+    tb2.cell(1, 4, "Interest Area or Rejected", text_color = cIDR, text_size = table_size_2, text_halign = text.align_left) 
+    tb2.cell(1, 5, "No Wick Rejection", text_color = cIDR, text_size = table_size_2, text_halign = text.align_left) 
+    //Content
+    // tb.cell(2, 1, str.tostring(ADR_Sess), text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)
+    // tb.cell(2, 2, str.tostring(ODR_Sess), text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)
+    // tb.cell(2, 3, str.tostring(RDR_Sess), text_color = cIDR, text_size = table_size_2, text_halign = text.align_left)
+
+
+
+
+// --------------------- ALERTS ------------------- // 
+alertcondition(Buy,   "Buy",  _IndicatorName + ". Buy")
+alertcondition(Sell,  "Sell", _IndicatorName + ". Sell")
+alertcondition(Buy and DRHighBrk,   "Buy + DR",  _IndicatorName + ". Buy + DR Conf. Long")
+alertcondition(Sell and DRLowBrk,  "Sell + DR", _IndicatorName + ". Sell + DR Conf. Short")
+
+alertcondition(OPO_Signal_BUY,   "Opposing to Buy",  _IndicatorName + ". A signal opposing a recent BUY signal has been issued. Concider breaking even or exiting position")
+alertcondition(OPO_Signal_SELL,  "Opposing to Sell", _IndicatorName + " A signal opposing a recent SELL signal has been issued. Concider breaking even or exiting position")
+alertcondition(DRBroken,  "DR Broken", _IndicatorName + ". DR Broken")
+alertcondition(DRFalse,   "DR False", _IndicatorName + ". DR is FALSE")
+alertcondition(DRBroken and (close_value[1] < DRLow or close_value[1] > DRHigh) and close_value > DRLow and close_value < DRHigh,  "DR Retraced", _IndicatorName + ". DR Retraced back into the range")
+
+
+bgcolor(timeframe.isintraday and isDeadZone() ? color.new(cDeadZone, 85) : na, editable = true)
+
+if iDaySeparators and JHINN.isNewTradingDay()
+    NewTimeLine(time, cDeadZone, line.style_dashed)
+
+
+Buy     := canPaint() ? Buy : false
+Sell    := canPaint() ? Sell : false
+OPO_Signal_BUY     := canPaint() ? OPO_Signal_BUY : false
+OPO_Signal_SELL    := canPaint() ? OPO_Signal_SELL : false
+
+plotchar(OPO_Signal_BUY and iOPOSignals, "", _OPOSymbolA, location.abovebar, size = size.tiny, force_overlay = true, editable = false, display = display.pane, color = cBear)
+plotchar(OPO_Signal_SELL and iOPOSignals, "", _OPOSymbolB, location.belowbar, size = size.tiny, force_overlay = true, editable = false, display = display.pane, color = cBull)
+
+barcolor(OPO_Signal_SELL and iOPOSignals ? cBull : na, 0, false)
+barcolor(OPO_Signal_BUY and iOPOSignals ? cBear : na, 0, false)
+
+plotchar(Buy and plottiny, "", _Symbol, location.belowbar, size = size.tiny, force_overlay = true, editable = false, display = display.pane)
+plotchar(Buy and plotsmall, "", _Symbol, location.belowbar, size = size.small, force_overlay = true, editable = false, display = display.pane)
+plotchar(Buy and plotnormal, "", _Symbol, location.belowbar, size = size.normal, force_overlay = true, editable = false, display = display.pane)
+
+plotchar(Sell and plottiny, "", _Symbol, location.abovebar, size = size.tiny, force_overlay = true, editable = false, display = display.pane)
+plotchar(Sell and plotsmall, "", _Symbol, location.abovebar, size = size.small, force_overlay = true, editable = false, display = display.pane)
+plotchar(Sell and plotnormal, "", _Symbol, location.abovebar, size = size.normal, force_overlay = true, editable = false, display = display.pane)
+
+plotshape(DRHighBrk and time == DRHighBrkTime and not DRLowBrk, "DR High Broken", shape.triangleup, location.abovebar, size = size.auto, color = BRUP_ASSIGNED, display = display.pane, editable = false, force_overlay = true)
+plotshape(DRLowBrk and time == DRLowBrkTime and not DRHighBrk, "DR Low Broken", shape.triangledown, location.belowbar, size = size.auto, color = BRDN_ASSIGNED, display = display.pane, editable = false, force_overlay = true)
+
+textWatermark = table.new("top" + "_" + "center", 1, 3)
+table.cell(textWatermark, 0, 0, bTitle ? (not(canPaint()) ? "⚠️ LOCKOUT ACTIVE ⚠️" : title) : na, 0, 0, (not(canPaint()) ? cRetracement : c_title), "center", text_size = (not(canPaint()) ? size.large : s_title))
+table.cell(textWatermark, 0, 1, bSubtitle ? (not(canPaint()) ? "STOP TRADING FOR TODAY" : subtitle) : na, 0, 0, (not(canPaint()) ? color.black : c_subtitle), "center", text_size = (not(canPaint()) ? size.normal : s_subtitle))
