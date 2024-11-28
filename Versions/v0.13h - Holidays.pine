@@ -1793,6 +1793,18 @@ isHoliday(string _date) =>
     res
 
 
+isHolidays() =>
+  isHoliday("11/28") or // Update thanksgiving to 11/26 for 2025
+  isHoliday("01/01") or 
+  isHoliday("01/18") or 
+  isHoliday("02/14") or 
+  isHoliday("02/16") or 
+  isHoliday("05/25") or 
+  isHoliday("07/04") or 
+  isHoliday("09/07") or 
+  isHoliday("12/25") and 
+  canPaint()
+
 var label l1 =na
 var line hl = na
 // if date1 or date2 or date3 or date4 or date5 or date6 or date7 or date8 or date9 and canPaint()
@@ -1803,17 +1815,7 @@ var line hl = na
 
 
 
-bgcolor(
-  isHoliday("11/28") or // Update thanksgiving to 11/26 for 2025
-  isHoliday("01/01") or 
-  isHoliday("01/18") or 
-  isHoliday("02/14") or 
-  isHoliday("02/16") or 
-  isHoliday("05/25") or 
-  isHoliday("07/04") or 
-  isHoliday("09/07") or 
-  isHoliday("12/25") and 
-  canPaint() ? color.new(cLimiter, 50) : na)
+bgcolor(isHolidays() ? color.new(cDeadZone, 80) : na)
 
 
 
@@ -1938,5 +1940,5 @@ plotshape(DRHighBrk and time == DRHighBrkTime and not DRLowBrk, "DR High Broken"
 plotshape(DRLowBrk and time == DRLowBrkTime and not DRHighBrk, "DR Low Broken", shape.triangledown, location.belowbar, size = size.auto, color = BRDN_ASSIGNED, display = display.pane, editable = false, force_overlay = true)
 
 textWatermark = table.new("top" + "_" + "center", 1, 3)
-table.cell(textWatermark, 0, 0, bTitle ? (not(canPaint()) ? "⚠️ LOCKOUT ACTIVE ⚠️" : title) : na, 0, 0, (not(canPaint()) ? cRetracement : c_title), "center", text_size = (not(canPaint()) ? size.large : s_title))
-table.cell(textWatermark, 0, 1, bSubtitle ? (not(canPaint()) ? "STOP TRADING FOR TODAY" : subtitle) : na, 0, 0, (not(canPaint()) ? color.black : c_subtitle), "center", text_size = (not(canPaint()) ? size.normal : s_subtitle))
+table.cell(textWatermark, 0, 0, bTitle ? isHolidays() ? "BANK HOLIDAY" : (not(canPaint()) ? "⚠️ LOCKOUT ACTIVE ⚠️" : title) : na, 0, 0, (not(canPaint()) ? cRetracement : isHolidays() ? cIDR : c_title), "center", text_size = (not(canPaint()) or isHolidays() ? size.large : s_title))
+table.cell(textWatermark, 0, 1, bSubtitle ? isHolidays() ? "- DON'T TRADE TODAY -" : (not(canPaint()) ? "STOP TRADING FOR TODAY" : subtitle) : na, 0, 0, (not(canPaint()) or isHolidays() ? color.black : c_subtitle), "center", text_size = (not(canPaint()) ? size.normal : isHolidays() ? size.small : s_subtitle))
