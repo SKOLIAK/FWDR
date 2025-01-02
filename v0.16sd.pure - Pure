@@ -1,0 +1,1381 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Dovydas Linkus
+// @version=5
+
+// BETA v0.99   - Implemented most of the functonallity and created a "baseline" indicator.
+// v0.10        - Updated libraries and various bug fixes.
+// v0.12        - Fixed some drawing issues where the lines and boxed would not start and or end on time.
+// v0.12f       - Expanded Fibonacci Retracement settings and added functionality.
+// v0.13h       - Added functionality of holiday days. Each holiday day will be marked in orange after market open.
+// v0.14pd      - Added functionality for PD Arrays adapted for DR/IDR to identify interest areas.
+// v0.15opt     - Code refactoring and optimisations.
+// v0.16sd.pure - Removal of Fractal Signal functionality. Rework of SD levels and extended functionality
+
+//////////////////////////////////////////////////////////////////
+//                          IMPORTS                             //
+//////////////////////////////////////////////////////////////////
+import Illukasse/DRIDR/37 as DR
+import Illukasse/LinesBoxes/12 as LB
+import Illukasse/Candle/8 as C
+import Illukasse/JHINN/27 as JHINN
+import PineCoders/VisibleChart/4 as PCchart
+
+//////////////////////////////////////////////////////////////////
+//                       INDICATOR BASE                         //
+//////////////////////////////////////////////////////////////////
+const string _INDICATOR              = str.upper('FWDR')
+const string _VERSION                = '0.16sd.pure'
+const string _SYMBOL                 = '🧢'
+const int    _MAX_BOXES              = 500
+const int    _MAX_LINES              = 500
+const int    _MAX_LABELS             = 500
+
+indicator(_INDICATOR + " " + _SYMBOL + " v"+_VERSION, 
+  overlay           = true,
+  max_boxes_count   = _MAX_BOXES, 
+  max_lines_count   = _MAX_LINES, 
+  max_labels_count  = _MAX_LABELS
+  )
+
+
+//////////////////////////////////////////////////////////////////
+//                         CONSTANTS                            //
+//////////////////////////////////////////////////////////////////
+const string _TIMEZONE               = 'America/New_York'
+
+const string _TIMEFRAME              = '5'
+
+const string _INPUT_RANGE            = '—'
+const int    _INPUT_STEP_SENSITIVITY = 3
+const string _INPUT_WATERMARK_A      = 'DON\'T PANIC, STAY CALM'
+const string _INPUT_WATERMARK_B      = 'LOOK FOR RDR SD LEVELS, BOX COLOR & CONFIRMATION - JUST TAKE THE TRADE'
+
+const int    _LIMIT_SD               = 50
+const int    _LIMIT_VIBS             = 50
+
+const string _DB_NAME                = ''
+
+
+//////////////////////////////////////////////////////////////////
+//                          COLORS                              //
+//////////////////////////////////////////////////////////////////
+const color cCeiling                 = #858aa7
+const color cFloor                   = #4a4e69
+const color cDelta                   = #F2AF29
+const color cBull                    = #3a86ff
+const color cBear                    = #4a4e69
+
+const color cBullBox                 = #417076
+const color cBearBox                 = #bb6362
+const color cNeutralBox              = #9598a1
+const color cSTDColor                = #686f83
+
+const color cSpecial                 = #2F9C95
+const color cLimiter                 = #F78E69
+const color cStandart                = #BC96E6
+const color cGAP                     = #D8A47F
+const color cDRC                     = #90bff9
+const color cVI                      = #DEB841
+const color cCluster                 = #a6b0d0
+
+const color cDR                      = #000000
+const color cIDR                     = #5d606b
+const color cMid                     = #4C4B63
+const color cOpen                    = #14b464
+const color cClose                   = #bb6362
+
+const color cFIB                     = #7189FF
+
+const color cWDR                     = #417076
+
+const color cRetracement             = #ba68c8
+const color cRetracement2            = #7b1fa2
+const color cExtension               = #14b464
+
+//////////////////////////////////////////////////////////////////
+//                      DROPDOWN OPTIONS                        //
+//////////////////////////////////////////////////////////////////
+string _SELECT_TINY                  = "Tiny"
+string _SELECT_SMALL                 = "Small"
+string _SELECT_NORMAL                = "Normal"
+
+string _SELECT_DASHED                = "Dashed"
+string _SELECT_DOTTED                = "Dotted"
+string _SELECT_SOLID                 = "Solid"
+
+
+//////////////////////////////////////////////////////////////////
+//                  VOLUME IMBALANCE SYMBOLS                    //
+//////////////////////////////////////////////////////////////////
+const string _VIB_REG               = "ϟ VIB"
+
+
+//////////////////////////////////////////////////////////////////
+//                           GROUPS                             //
+//////////////////////////////////////////////////////////////////
+const string TimeGroup              = 'SESSIONS & TIMES ⌛'
+const string FIBGroup               = 'RETIREMENT SETUP AREA 🎯'
+const string STDLGroup              = 'STANDART DEVIATIONS ↕️'
+
+const string RETEXTString           = 'AREAS AND TIMES 📌'
+var string   RETEXTGroup            = str.length(_DB_NAME) > 0 ? '"' + _DB_NAME + '" ' + RETEXTString : RETEXTString
+const string ImbalanceGroup         = 'VOLUME IMBALANCES 🏷️'
+const string DRStylesGroup          = 'DR/IDR SETTINGS 🎭'
+const string BoxGroup               = 'BOX, LINES AND LABELS STYLING 🧊'
+const string MiscGroup              = 'MISCELLANEOUS 💡'
+const string WatermarkGroup         = 'WATERMARK ✔️'
+
+
+//////////////////////////////////////////////////////////////////
+//                          VARIABLES                           //
+//////////////////////////////////////////////////////////////////
+
+//** DR TIMEFRAME ------------------------------------------------
+var bool UseDRTimeframe             = false
+
+//** DR STATISTICS -----------------------------------------------
+var int STAT_ADR                    = 0
+var int STAT_ODR                    = 0
+var int STAT_RDR                    = 0
+var int STAT_ADR_TRUE               = 0
+var int STAT_ODR_TRUE               = 0
+var int STAT_RDR_TRUE               = 0
+
+//** BOXES -------------------------------------------------------
+var box DRBox                       = na
+var box RETBoxA                     = na
+var box RETBoxB                     = na
+var box EXTBox                      = na
+
+
+//** LINES -------------------------------------------------------
+var line L_DRHigh                   = na
+var line L_IDRHigh                  = na
+var line L_IDRMid                   = na
+var line L_IDRLow                   = na
+var line L_DRLow                    = na
+var line L_OpenPrice                = na
+var line L_ClosePrice               = na
+var line L_FIB                      = na
+var line L_RET                      = na
+var line L_EXT                      = na
+
+//** DR/IDR  -----------------------------------------------------
+var float DRHigh                    = na
+var float DRLow                     = na
+var float IDRHigh                   = na
+var float IDRLow                    = na
+var float IDRMid                    = na
+
+var float OpenPrice                 = na
+var float ClosePrice                = na
+
+var int OpenTime                    = na
+var int RangeEndTime                = na
+var int EndTime                     = na
+var float FIB                       = na
+
+var bool DRBroken                   = false
+var bool DRFalse                    = false
+var int  DRFirstBrkTime             = na
+var bool DRHighBrk                  = false
+var int  DRHighBrkTime              = 0
+var bool DRLowBrk                   = false
+var int  DRLowBrkTime               = 0
+
+var float RegisterIDRLow            = na
+var float RegisterIDRHigh           = na
+var int   SDLinesStopTime           = na
+
+//** RETRACEMENT & EXTENSION VALUES ------------------------------
+var float RETA                      = na
+var float RETB                      = na
+var float RETAB                     = na
+var float RETBB                     = na
+var float EXTA                      = na
+var float EXTB                      = na
+
+//** DR/IDR SESSIONS  --------------------------------------------
+var string CurrentSession           = na
+
+//** COLLECTIONS -------------------------------------------------
+var box[]   _ARRAY_DRC              = array.new<box>()
+var line[]  _ARRAY_SDLINES          = array.new<line>()
+var float[] _ARRAY_SDLEVELS         = array.new<float>()
+var label[] _ARRAY_SDLABELS         = array.new<label>()
+
+var line[]  _ARRAY_RDR_SDLINES      = array.new<line>()
+var float[] _ARRAY_RDR_SDLEVELS     = array.new<float>()
+var label[] _ARRAY_RDR_SDLABELS     = array.new<label>()
+
+
+var line[]  _ARRAY_ISDLINES          = array.new<line>()
+var float[] _ARRAY_ISDLEVELS         = array.new<float>()
+var label[] _ARRAY_ISDLABELS         = array.new<label>()
+
+
+
+
+
+//////////////////////////////////////////////////////////////////
+//                           INPUTS                             //
+//////////////////////////////////////////////////////////////////
+
+// ------------------- SESSIONS SETTINGS -------------------- //
+
+iODR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show London session', inline = "ODR")
+iODRTime            = input.session("0300-0830",        "ODR",                                          group = TimeGroup, tooltip = "Enable or Disable London session and set times", inline = "ODR")
+
+iRDR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show New York session', inline = "RDR")
+iRDRTime            = input.session("0930-1600",        "RDR",                                          group = TimeGroup, tooltip = "Enable or Disable New York session and set times", inline = "RDR")
+
+iADR                = input.bool(true,                  "",                                             group = TimeGroup, tooltip='Show Tokyo session', inline = "ADR")
+iADRTime            = input.session("1930-0200",        "ADR",                                          group = TimeGroup, tooltip = "Enable or Disable Tokyo session and set times", inline = "ADR")
+
+
+// ------------------ DR/IDR SETTINGS -------------------- //
+
+iDR                 = input.bool(true, "", group = DRStylesGroup, inline = "DR LINE")
+iDRLineStyle        = input.string(_SELECT_SOLID, "DR", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "DR LINE")
+iCDR                = input.color(cDR, "", group = DRStylesGroup, inline = "DR LINE")
+
+iIDR                = input.bool(true, "", group = DRStylesGroup, inline = "IDR LINE")
+iIDRLineStyle       = input.string(_SELECT_DASHED, "IDR", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "IDR LINE")
+iCIDR               = input.color(cIDR, "", group = DRStylesGroup, inline = "IDR LINE")
+
+
+iMid                = input.bool(true, "", group = DRStylesGroup, inline = "MID LINE")
+iMidLineStyle       = input.string(_SELECT_DASHED, "Middle", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "MID LINE")
+iCMid               = input.color(cMid, "", group = DRStylesGroup, inline = "MID LINE")
+
+iOpen                = input.bool(true, "", group = DRStylesGroup, inline = "OPEN LINE")
+iOpenLineStyle       = input.string(_SELECT_SOLID, "Open", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "OPEN LINE")
+iCOpen               = input.color(cOpen, "", group = DRStylesGroup, inline = "OPEN LINE")
+
+iClose                = input.bool(true, "", group = DRStylesGroup, inline = "CLOSE LINE")
+iCloseLineStyle       = input.string(_SELECT_SOLID, "Close", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "CLOSE LINE")
+iCClose               = input.color(cClose, "", group = DRStylesGroup, inline = "CLOSE LINE")
+
+iWDR                = input.bool(true, "WDR", group = DRStylesGroup, inline = "WDR")
+iCWDR               = input.color(cWDR, "", group = DRStylesGroup, inline = "WDR", tooltip = "WDR (Weekly DR Range) acts as a magnet, especially on Thursdays.\n\nTurnaround Thursday refers to the market phenomenon where the S&P 500 and other major indices often reverse their direction on Thursdays following a significant move from Tuesday.")
+iWDRStyle           = input.string(_SELECT_DASHED, "", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = DRStylesGroup, inline = "WDR")
+iDRClusters         = input.bool(true, "DRC", group = DRStylesGroup, inline = "DR CLUSTERS")
+iDRClusterDays      = input.int(3, " ", minval = 1, step = 1, inline = "DR CLUSTERS", group = DRStylesGroup)
+iCDRClusters        = input.color(cDRC, "", group = DRStylesGroup, inline = "DR CLUSTERS", tooltip = "Checbox: Enable or disable DR/IDR Clusters. Acts as a S/R. \n\n\Input: Days back to show DR/IDR clusters for. \n\nColor: Choose DRC Color")
+
+iColorDRBox         = input.bool(true, "Color DR Box based on close?", group = DRStylesGroup, tooltip = "If disabled second color will be used for all DR boxes.")
+iCBullBox           = input.color(cBullBox, "", group = DRStylesGroup, inline = "BOX COLOR")
+iCBearBox           = input.color(cBearBox, "", group = DRStylesGroup, inline = "BOX COLOR")
+
+// -------------------- FIBONACCI SETTINGS --------------------- //
+iFIB                = input.bool(true, "", group = FIBGroup, inline = "FIB LINE 1")
+iFIBVal             = input.int(75, "", group = FIBGroup, inline = "FIB LINE 1", minval = 1, maxval = 100)
+iCFIB               = input.color(cFIB, "", group = FIBGroup, inline = "FIB LINE 1", tooltip = "Checkbox: If selected, will automatically plot a Fibonacci retracement when direction is confirmed.\n\nInput: Fibonacci retracement level.\n\nColor: Fibonacci Retracement line color")
+iFIBType            = input.string("IDR", "Type", options = ["DR", "IDR"], group = FIBGroup, inline = "FIB LINE 2")
+iFIBStyle           = input.string(_SELECT_DASHED, "", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID], group = FIBGroup, inline = "FIB LINE 2", tooltip = "Dropdown: Choose which High & Low points Fibonacci will use.\n\nDropdown 2: Select the line style.")
+
+
+// ------------------ STANDART DEVIATION SETTINGS -------------------- //
+
+iSTDLines                   = input.bool(true, "",                                      group = STDLGroup,  inline = "STD 1")
+iSTDLineStyle               = input.string(_SELECT_DOTTED, "",                                 group = STDLGroup,  inline = "STD 1", options = [_SELECT_DASHED, _SELECT_DOTTED, _SELECT_SOLID])
+iSTDLineColor               = input.color(cSTDColor, "",                                group = STDLGroup,  inline = "STD 1")
+iSTDLabels                  = input.bool(true, "Labels",                                group = STDLGroup,  inline = "STD 1", tooltip = "If enabled, shows the Standard Deviation lines in 0.5 IDR range increments.\n\nDropdown: Choose line style for standart deviations\n\nColor: Choose color of standart deviation lines.\n\nLabels: Enable or disable labels")
+
+iSTDAll                     = input.bool(true, "All",                                   group = STDLGroup,  inline = "STD 2")
+iSTDLineNegative            = input.int(8, "",                 minval=1,                group = STDLGroup,  inline = "STD 2")
+iSTDLinePositive            = input.int(8, _INPUT_RANGE,       minval=1,                group = STDLGroup,  inline = "STD 2")
+iSTDAllType                 = input.string("RDR", "History", options = ["RDR", "All Sessions"],    group = STDLGroup,  inline = "STD 3", tooltip = "All: If enabled, shows all the STD lines on previous sessions.\n\nInput Range: Negative & Positive SD level count to display.\n\nDropdown: Select which session SD levels to display if `All` is enabled.\n\nRDR: Isolates SD levels to only RDR.\n\nAll Sessions: Displays all SD levels for all sessions")
+
+
+// ------------------ RETRACEMENT AND EXTENSION SETTINGS -------------------- //
+
+iRetrace                    = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "RETRACE")
+retrace_begin               = input.float(-0.1, "RET",               minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE")
+retrace_end                 = input.float(-0.3, _INPUT_RANGE,        minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE")
+icRetrace                   = input.color(cRetracement, "",                                                     group = RETEXTGroup,  inline = "RETRACE")
+
+iRetrace2                   = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "RETRACE 2")
+retrace_begin2              = input.float(-0.4, "RET",               minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE 2")
+retrace_end2                = input.float(-0.6, _INPUT_RANGE,        minval=-1, maxval=1, step = 0.1,           group = RETEXTGroup,  inline = "RETRACE 2")
+icRetrace2                  = input.color(cRetracement2, "",                                                    group = RETEXTGroup,  inline = "RETRACE 2")
+
+iExtend                     = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "EXTEND")
+extension_begin             = input.float(2.1, "EXT",               minval=0, step = 0.1,                       group = RETEXTGroup,  inline = "EXTEND")
+extension_end               = input.float(2.3, _INPUT_RANGE,        minval=0, step = 0.1,                       group = RETEXTGroup,  inline = "EXTEND")
+icExtend                    = input.color(cExtension, "",                                                       group = RETEXTGroup,  inline = "EXTEND")
+
+iMedian                     = input.bool(false, "",                                                              group = RETEXTGroup,  inline = "MEDIAN")
+iMedianTime                 = input.session("1130-1355", "MED",                                                 group = RETEXTGroup,  inline = "MEDIAN", tooltip = "Requires Standart Deviations to be enabled")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---------------- VOLUME IMBALANCE SETTINGS ------------------ //
+iVI                 = input.bool(true, "", group = ImbalanceGroup, inline = "VI")
+icVI                = input.color(cVI, "Regular (" + _VIB_REG + ")", group = ImbalanceGroup, inline = "VI")
+iVIClusters         = input.bool(true, "Clusters", group = ImbalanceGroup, inline = "VI")
+icCluster           = input.color(cCluster, "", group = ImbalanceGroup, inline = "VI", tooltip = "If clusters enabled (default), rebalanced VIBs (non-magnetic) will still show on the chart, potentially acting as a TP/SL locations. Use as a confluence. \n\nColor: Choose color for clusters")
+
+iGAP                = input.bool(true, "", group = ImbalanceGroup, inline = "GAP")
+icGAP               = input.color(cGAP, "Price GAP", group = ImbalanceGroup, inline = "GAP")
+
+
+// ---------------=-- BOX, LINES AND LABELS STYLE SETTINGS ------------------- //
+iLineWidth          = input.int(1,      "Line Width",               group = BoxGroup)
+iBorderWidth        = input.int(1,      "Border Width",             group = BoxGroup)
+iBGTransp           = input.int(75,     "Background Transparency",  group = BoxGroup)
+iBorderTransp       = input.int(75,     "Border Transparency",      group = BoxGroup)
+iLabelTransp        = input.int(60,     "Label Transparency",       group = BoxGroup)
+iVITransp           = input.int(70,     "VI Transparency",          group = BoxGroup, tooltip = "Transparency value for all types of volume imbalances.")
+iClusterTransp      = input.int(88,     "Cluster Transparency",     group = BoxGroup, tooltip = "This applied to any kind of cluster, such as re-balanced vibs, drc clusters")
+
+
+// -------------------- WATERMARK -------------------- //
+bTitle              = input.bool(true, "", group = WatermarkGroup, inline = "title")
+title               = input.string(_INPUT_WATERMARK_A,    "",       group = WatermarkGroup, inline = "title")
+c_title             = input.color(color.new(cBear, 20), "",           group = WatermarkGroup, inline = "title")
+s_title             = input.string("large", "",                           options = ["tiny", "small", "normal", "large", "huge", "auto"], group = WatermarkGroup, inline = "title")
+
+
+bSubtitle           = input.bool(true, "", group = WatermarkGroup, inline = "subtitle")
+subtitle            = input.string(_INPUT_WATERMARK_B,              "",       group = WatermarkGroup, inline = "subtitle")
+c_subtitle          = input.color(cStandart,                    "",       group = WatermarkGroup, inline = "subtitle")
+s_subtitle          = input.string("small",                     "",       options = ["tiny", "small", "normal", "large", "huge", "auto"], group = WatermarkGroup, inline = "subtitle")
+
+iShowDate           = input.bool(true, "Show Date Instead", group = WatermarkGroup)
+
+
+// ------------------ MISCELENIOUS ------------------ //
+iDaySeparators      = input.bool(true, "New Trading Day Separators", group = MiscGroup, inline = "DAY SEPARATORS", tooltip = "Marks the market re-open for each day")
+iDisplayLabels      = input.bool(true, "Show Labels", group = MiscGroup, inline = "label")
+iLabelSize          = input.string(_SELECT_SMALL, "", options = [_SELECT_TINY, _SELECT_SMALL, _SELECT_NORMAL], group = MiscGroup, inline = "label")
+iShowStats          = input.bool(true, "DR Statistics", group = MiscGroup, inline = "STATS")
+iStatCond           = input.string("Close", "", options = ["Wick", "Close"],  group = MiscGroup, inline = "STATS", tooltip = "Close - Will check if close values violate DR levels.\nWick - Will check if wicks violate DR levels instead of close.\n\nChanging between the two calculation methods and observing the percentages can indicate which session is the `wickiest`.")
+
+
+//////////////////////////////////////////////////////////////////
+//                         FUNCTIONS                            //
+//////////////////////////////////////////////////////////////////
+
+// @function Determine if indicator is able to paint anything on the chart
+canPaint() => true
+
+// @function Switch size from human friendly text
+__SIZE(_inputOption) =>
+    switch(_inputOption)
+        _SELECT_TINY     => size.tiny
+        _SELECT_SMALL    => size.small
+        _SELECT_NORMAL   => size.normal
+        => size.auto
+
+  // @function Switch style from human friendly text      
+__STYLE(_inputOption) =>
+    switch(_inputOption)
+        _SELECT_DASHED     => line.style_dashed
+        _SELECT_DOTTED     => line.style_dotted
+        _SELECT_SOLID      => line.style_solid
+        => size.auto
+
+
+
+//** SESSION FUNCTIONS ------------------------------------------------------------------------------------
+// @function Check if time is withing session range
+IsSession(_session) => 
+    JHINN.timeinrange(timeframe.period, _session, _TIMEZONE) and canPaint()
+
+GetCurrentSessionTimestring() => 
+    IsSession(iADRTime) and iADR ? iADRTime : IsSession(iODRTime) and iODR ? iODRTime : IsSession(iRDRTime) and iRDR ? iRDRTime : na
+
+// Set the current session
+CurrentSession := CurrentSession != GetCurrentSessionTimestring() ? GetCurrentSessionTimestring() : CurrentSession
+
+// @function Checks if currently in a session
+inSession() => bool(not(na(CurrentSession)))
+
+// @function Checks whether current session is in ranging area
+inRange() => 
+    inSession() ? IsSession(DR.getRangeTime(CurrentSession, true)) : false
+
+// @function Checks whether current session is in extension area
+inExtend() =>
+    inSession() ? IsSession(DR.getExtensionTime(CurrentSession, true)) : false
+
+// @function Checks if current session is TOKYO
+isADRSession() =>
+    CurrentSession == iADRTime and iADR
+
+// @function Checks if current session is LONDON
+isODRSession() =>
+    CurrentSession == iODRTime and iODR
+
+// @function Checks if current session is NEW YORK
+isRDRSession() =>
+    CurrentSession == iRDRTime and iRDR
+
+// @function Checks whether current session is in TOKYO ranging area
+inADRRange() =>
+    isADRSession() and inRange()
+
+// @function Checks whether current session is in LONDON ranging area
+inODRRange() =>
+    isODRSession() and inRange()
+
+// @function Checks whether current session is in NEW YORK ranging area
+inRDRRange() => 
+    isRDRSession() and inRange()
+
+// @function Checks whether current session is in TOKYO extension area
+inADRExtend() =>
+    isADRSession() and inExtend()
+
+// @function Checks whether current session is in LONDON extension area
+inODRExtend() =>
+    isODRSession() and inExtend()
+
+// @function Checks whether current session is in NEW YORK extension area
+inRDRExtend() =>
+    isRDRSession() and inExtend()
+
+// @function Checks if we entered a new session
+enterSession() =>
+    inSession() and not inSession()[1]
+
+// @function Checks if we left a session
+leaveSession() =>
+    not inSession() and inSession()[1]
+
+// @function Checks if we entered an extension of a session
+enterExtend() => 
+    inSession() and not inRange() and inRange()[1] and inExtend()
+
+
+
+
+
+
+NewBox(string _name, color _color = color.black) => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cBearBox, iBGTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid, text = _name, text_halign = text.align_center, text_valign = text.align_top, text_color = color.new(_color, iLabelTransp))
+
+NewDRBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cBearBox, iBGTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewRetraceBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cRetracement, iBorderTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewEXTBox() => 
+    box.new(na, na, na, na, xloc=xloc.bar_time, bgcolor=color.new(cOpen, iBorderTransp), border_width = iBorderWidth, border_color = color.new(cBearBox, iBorderTransp), border_style = line.style_solid)
+
+NewTimeLine(_time, _color, _style, float _high = high, float _low = low) =>
+    line.new(_time, _low, _time, _high,  xloc.bar_time, extend.both, _color, _style, iLineWidth)
+
+
+
+
+
+
+
+
+
+
+NewDRLine()   => 
+    LB.NewLine(iDR ? iCDR : na, __STYLE(iDRLineStyle))
+
+NewWDRLine()   => 
+    LB.NewLine(iWDR ? iCWDR : na, __STYLE(iWDRStyle))
+
+NewIDRLine()  => 
+    LB.NewLine(iIDR ? iCIDR : na, __STYLE(iIDRLineStyle))
+
+NewMiddleLine()   => 
+    LB.NewLine(iMid ? iCMid : na, __STYLE(iMidLineStyle)) 
+
+NewOpenLine()   => 
+    LB.NewLine(iOpen ? iCOpen : na, __STYLE(iOpenLineStyle)) 
+
+NewCloseLine() => 
+    LB.NewLine(iClose ? iCClose : na, __STYLE(iCloseLineStyle)) 
+
+NewFIBLine() => 
+    LB.NewLine(iCFIB, __STYLE(iFIBStyle)) 
+
+DrawSDLine(_fromTime, _toTime, _level, float _stdLabelValue = na, bool _on_left_side = false, string _lineStyle = line.style_dotted) =>
+    int label_time = na
+    label_time := _on_left_side ? OpenTime : _toTime
+    if not na(_level)
+        if not array.includes(isRDRSession() ? _ARRAY_RDR_SDLEVELS : _ARRAY_SDLEVELS, _level)
+            array.push(isRDRSession() ? _ARRAY_RDR_SDLEVELS : _ARRAY_SDLEVELS, _level)
+            L = LB.MoveLine(LB.NewLine(iSTDLineColor, _lineStyle), _fromTime, _level, _toTime)
+            array.push(isRDRSession() ? _ARRAY_RDR_SDLINES : _ARRAY_SDLINES, L)
+            if iSTDLabels
+                array.push(isRDRSession() ? _ARRAY_RDR_SDLABELS : _ARRAY_SDLABELS, LB.MoveLabel(LB.NewLabel(iSTDLineColor, color(na), __SIZE(iLabelSize), _on_left_side ? text.align_left : text.align_right), label_time, _level, str.format('{0}',_stdLabelValue)))
+
+DrawInternalSDLine(_fromTime, _toTime, _level, float _stdLabelValue = na, bool _on_left_side = false, string _lineStyle = line.style_dotted) => 
+    int label_time = na
+    label_time := _on_left_side ? OpenTime : _toTime
+    if not na(_level)
+        if not array.includes(_ARRAY_ISDLEVELS, _level)
+            array.push(_ARRAY_ISDLEVELS, _level)
+            L = LB.MoveLine(LB.NewLine(iSTDLineColor, _lineStyle), _fromTime, _level, _toTime)
+            array.push(_ARRAY_ISDLINES, L)
+            if iSTDLabels
+                array.push(_ARRAY_ISDLABELS, LB.MoveLabel(LB.NewLabel(iSTDLineColor, color(na), __SIZE(iLabelSize), _on_left_side ? text.align_left : text.align_right), label_time, _level, str.format('{0}',_stdLabelValue)))
+
+
+DrawSDLines(_fromTime, _toTime, bool _upside = false) =>
+    var float   stdStepFactor               = 0.5
+    var float   stdStepFactorInternal       = 0.1
+    var float   stdStepInternal             = na
+    var float   stdStep                     = na
+    var float   stdLevel                    = na
+    var float   stdLabelValue               = na
+    var int     nrLevels                    = na
+    var int     nrLevelsPos                 = na
+    var int     nrLevelsNeg                 = na
+    var float   retrace_a                   = na
+    var float   retrace_b                   = na
+    var float   retrace_aa                  = na
+    var float   retrace_bb                  = na
+    var float   extend_a                    = na
+    var float   extend_b                    = na 
+
+    stdStep := math.abs(RegisterIDRHigh-RegisterIDRLow)  * stdStepFactor
+
+    if stdStep != 0 and iSTDLines
+
+        nrLevelsPos := iSTDLinePositive
+        nrLevelsNeg := iSTDLineNegative
+
+        day = JHINN.OneDay()
+
+        // Positive lines
+        if nrLevelsPos >= 1
+            for cnt = 1 to nrLevelsPos
+                stdLevel      := RegisterIDRHigh + (cnt * stdStep)
+                stdLabelValue := cnt * stdStepFactor
+
+
+
+
+                DrawSDLine(_fromTime, isRDRSession() ? JHINN.toTimestamp(JHINN.getSessionPart(iODRTime, 1), _TIMEZONE) + day : _toTime, stdLevel, stdLabelValue, false, __STYLE(iSTDLineStyle))
+
+        // Negative lines
+        if nrLevelsNeg >= 1
+            for cnt = 1 to nrLevelsNeg
+                stdLevel      := RegisterIDRLow - (cnt * stdStep)
+                stdLabelValue := cnt * (-stdStepFactor)
+                DrawSDLine(_fromTime, isRDRSession() ? JHINN.toTimestamp(JHINN.getSessionPart(iODRTime, 1), _TIMEZONE) + day : _toTime, stdLevel, stdLabelValue, false, __STYLE(iSTDLineStyle))
+
+
+        if DRBroken
+            stdStepInternal := math.abs(RegisterIDRHigh-RegisterIDRLow)  * stdStepFactorInternal
+
+            for cnt = 0 to 10
+                stdLevel      := _upside ? RegisterIDRHigh - (cnt * stdStepInternal) : RegisterIDRLow + (cnt * stdStepInternal)
+                stdLabelValue := cnt * (-1 * stdStepFactorInternal)
+
+
+                // Push out price levels if retracement is matching
+                if stdLabelValue == retrace_begin
+                    retrace_a := stdLevel
+
+                // Push out price levels if retracement is matching
+                if stdLabelValue == retrace_begin2
+                    retrace_aa := stdLevel
+
+                if stdLabelValue == retrace_end
+                    retrace_b := stdLevel
+
+                if stdLabelValue == retrace_end2
+                    retrace_bb := stdLevel
+                // end
+
+                DrawInternalSDLine(not(na(DRHighBrkTime)) ? DRHighBrkTime : not(na(DRLowBrkTime)) ? DRLowBrkTime : na, _toTime, stdLevel, stdLabelValue, false)
+
+
+
+            // Positive lines
+            if nrLevelsPos >= 1 and DRHighBrk
+                for cnt = 1 to (nrLevelsPos * 10) / 2
+                    stdLevel      := RegisterIDRHigh + (cnt * stdStepInternal)
+                    stdLabelValue := cnt * stdStepFactorInternal
+
+                    // Push out price levels if extension is matching
+                    if stdLabelValue == extension_begin
+                        extend_a := stdLevel
+
+                    if stdLabelValue == extension_end
+                        extend_b := stdLevel
+
+
+                    if stdLabelValue == retrace_begin
+                        retrace_a := stdLevel
+
+                    // Push out price levels if retracement is matching
+                    if stdLabelValue == retrace_begin2
+                        retrace_aa := stdLevel
+
+                    if stdLabelValue == retrace_end
+                        retrace_b := stdLevel
+
+                    if stdLabelValue == retrace_end2
+                        retrace_bb := stdLevel
+
+
+
+                    // end
+
+            // Negative lines
+            if nrLevelsNeg >= 1 and DRLowBrk
+                for cnt = 1 to (nrLevelsNeg * 10) / 2
+                    stdLevel      := RegisterIDRLow - (cnt * stdStepInternal)
+                    stdLabelValue := cnt * stdStepFactorInternal
+
+                    // Push out price levels if extension is matching
+                    if stdLabelValue == extension_begin
+                        extend_a := stdLevel
+
+                    if stdLabelValue == extension_end
+                        extend_b := stdLevel
+
+                    if stdLabelValue == retrace_begin
+                        retrace_a := stdLevel
+
+                    // Push out price levels if retracement is matching
+                    if stdLabelValue == retrace_begin2
+                        retrace_aa := stdLevel
+
+                    if stdLabelValue == retrace_end
+                        retrace_b := stdLevel
+
+                    if stdLabelValue == retrace_end2
+                        retrace_bb := stdLevel
+                    // end
+
+
+    [retrace_a, retrace_b, retrace_aa, retrace_bb, extend_a, extend_b]
+
+
+//////////////////////////////////////////////////////////////////
+//                       CALCULATIONS                           //
+//////////////////////////////////////////////////////////////////
+
+if barstate.isfirst
+    UseDRTimeframe := timeframe.in_seconds(timeframe.period) != 360
+    
+// ------------------------- DR/IDR --------------------------- //
+
+[m5_open, m5_high, m5_low, m5_close] = request.security(syminfo.tickerid, _TIMEFRAME, [open, high, low, close], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off)
+[m5_open2, m5_high2, m5_low2, m5_close2] = request.security(syminfo.tickerid, _TIMEFRAME, [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off)
+
+open_value  = UseDRTimeframe ? m5_open : open
+high_value  = UseDRTimeframe ? m5_high : high
+low_value   = UseDRTimeframe ? m5_low : low
+close_value = UseDRTimeframe ? m5_close : close
+
+
+var box[] _WDR = array.new_box()
+var float WDR_Mid = na
+var line WDRLine = na
+
+
+if array.size(_WDR) > 0
+    for i = array.size(_WDR) - 1 to 0 by 1
+        _box = array.get(_WDR, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        box.set_right(_box, bar_index + 1)
+
+if array.size(_WDR) > 1
+    box.delete(array.shift(_WDR))
+
+
+
+
+// Bar ID of DR open
+var int OpenBar         = na
+
+// Weekly DR
+var box WDR             = na
+
+
+// var bool ADR_Broken = false
+// var bool ADR_False = false
+// var float ADR_BreakTime = na
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+f_timestrToHM(_timeStr) =>
+    var int     hourInt   = na
+    var int     minuteInt = na
+    if str.length(_timeStr) == 4
+        hourInt   := int(str.tonumber(str.substring(_timeStr, 0, 2)))
+        minuteInt := int(str.tonumber(str.substring(_timeStr, 2, 4)))
+    [hourInt, minuteInt]
+
+f_sessionTime(_session, _timezone=syminfo.timezone, _part) =>
+    var int ts = na
+    if str.length(_session) == 9 and (_part == 0 or _part == 1)
+        arraySessionSplit = str.split(_session, '-')
+        timeStrTo          = array.get(arraySessionSplit, _part)
+        [hourTo, minuteTo] = f_timestrToHM(timeStrTo)
+        ts := timestamp(_timezone, year, month, dayofmonth, hourTo, minuteTo)
+    ts
+
+f_sessionStartTime(_session, _timezone=syminfo.timezone) => f_sessionTime(_session, _timezone, 0)
+f_sessionStopTime(_session, _timezone=syminfo.timezone)  => f_sessionTime(_session, _timezone, 1)
+
+
+
+// Function to push new box into the respective array
+AddDRCluster(bool condition, color _color, string _name, _array) =>
+    if condition
+        box _a = NewBox(_name, _color)
+        if array.size(_array) > int(iDRClusterDays * 6)
+            box.delete(array.shift(_array))
+        array.push(_array, _a)
+        _a
+
+
+
+// GetCurrentSessionTimestring() =>
+//     res = "0000-0000"
+//     if isTokyo()
+//         res := iADRTime
+//     if isLondon()
+//         res := iODRTime
+//     if isNewYork()
+//         res := iRDRTime
+
+//     res
+
+
+var box testbox = na
+
+
+var int WDRLineStartTime = na
+var bool DrawMedianRetracement = false
+var bool DrawMedianExtension = false
+
+string DummyHour = "0000"
+var string SESSION_STARTHOUR  = DummyHour
+var string SESSION_RANGEEND   = DummyHour
+var string SESSION_SECONDHOUR = DummyHour
+var string SESSION_END        = DummyHour
+
+color BRUP      = color.teal
+color BRDN      = color.orange
+color BR_MUTE   = #8e8e8e
+
+var color BRUP_ASSIGNED = na
+var color BRDN_ASSIGNED = na
+
+
+var int DRBoxColor = 0
+
+
+if timeframe.isintraday  and timeframe.in_seconds(timeframe.period) <= 360 and canPaint() //and (PCchart.barIsVisible() or not showAllHistory)
+
+
+    if array.size(_ARRAY_DRC) > 0
+        for i = array.size(_ARRAY_DRC) - 1 to 0 by 1
+            _box = array.get(_ARRAY_DRC, i)
+            _boxLow = box.get_bottom(_box)
+            _boxHigh = box.get_top(_box)
+            _boxRight = box.get_right(_box)
+
+            box.set_right(_box, bar_index + 1)
+
+
+    if enterSession()
+        SESSION_STARTHOUR   := JHINN.getSessionPart(CurrentSession, 0)
+        SESSION_RANGEEND    := DR.getRangeTime(CurrentSession, false)
+        SESSION_SECONDHOUR  := DR.getSecondHour(CurrentSession)
+        SESSION_END         := JHINN.getSessionPart(CurrentSession, 1)
+
+        OpenBar             := bar_index
+        OpenPrice           := open_value
+        OpenTime            := time
+
+        DRBox               := NewDRBox()
+
+        L_DRHigh            := NewDRLine()
+        L_DRLow             := NewDRLine()
+
+        L_IDRHigh           := NewIDRLine()
+        L_IDRLow            := NewIDRLine()   
+
+        if iMid
+            L_IDRMid            := NewMiddleLine()
+
+        if iOpen
+            L_OpenPrice         := NewOpenLine()
+
+        if iClose
+            L_ClosePrice        := NewCloseLine()
+
+        if iFIB
+            L_FIB               := NewFIBLine()
+
+        if iRetrace
+            RETBoxA         := NewRetraceBox()
+
+        if iRetrace2 
+            RETBoxB         := NewRetraceBox()
+
+        if iExtend
+            EXTBox           := NewEXTBox()
+
+         // Initialise Values
+        DRHigh              := high_value
+        DRLow               := low_value
+        IDRHigh             := close_value
+        IDRLow              := close_value
+
+    if inSession()
+        EndTime := time
+
+    if inRange()
+        DRHigh              := math.max(high_value, DRHigh)
+        DRLow               := math.min(low_value, DRLow)
+
+        IDRHigh             := math.max(close_value, IDRHigh)
+        IDRLow              := math.min(close_value, IDRLow)
+
+        IDRMid              := math.avg(IDRHigh, IDRLow)
+
+        DRBoxColor          := OpenPrice < close_value ? 1 : OpenPrice == close_value ? 0 : -1
+        BoxColor            = DRBoxColor == 1 ? color.new(iCBullBox, iBGTransp) : DRBoxColor == -1 ? color.new(iCBearBox, iBGTransp) : color.new(cNeutralBox, iBGTransp)
+        
+        LB.MoveBox(DRBox, OpenTime, IDRHigh, time, IDRLow, color.new(BoxColor, iBorderTransp), BoxColor)
+
+
+    if iFIB and DRBroken
+        iFIBVal := DRLowBrk and not(DRFalse) ? 100 - iFIBVal : iFIBVal
+
+        FIB_PointH = iFIBType == "DR" ? DRHigh : IDRHigh
+        FIB_PointL = iFIBType == "DR" ? DRLow : IDRLow
+
+        FIB := FIB_PointH - (FIB_PointH - FIB_PointL) * iFIBVal / 100
+        LB.MoveLine(L_FIB, RangeEndTime, FIB, EndTime + 1)
+
+
+    if inRange() or inExtend()
+        // We add 1 to accurately draw lines all the way to the end of the session
+        LB.MoveLine(L_DRHigh, OpenTime, DRHigh, EndTime + 1)
+        LB.MoveLine(L_DRLow, OpenTime, DRLow, EndTime + 1)
+
+        LB.MoveLine(L_IDRHigh, OpenTime, IDRHigh, EndTime + 1)
+        LB.MoveLine(L_IDRLow, OpenTime, IDRLow, EndTime + 1)
+
+        LB.MoveLine(L_OpenPrice, OpenTime, OpenPrice, EndTime + 1)
+
+        LB.MoveLine(L_IDRMid, OpenTime, IDRMid, EndTime + 1)
+
+    if enterExtend()
+        //RangeEndTime        := time[1]
+        RangeEndTime        := JHINN.toTimestamp(SESSION_RANGEEND) - math.abs(time - time[1])
+        ClosePrice          := close_value[1]
+
+        SDLinesStopTime    := f_sessionTime(CurrentSession, _TIMEZONE, 1) + ((JHINN.isOvernight(CurrentSession) ? JHINN.OneDay() : 0) * (dayofweek == dayofweek.friday and syminfo.type != 'crypto' ? 3 : 1))
+
+
+        // Register values for STD 
+        RegisterIDRHigh          := IDRHigh
+        RegisterIDRLow           := IDRLow
+
+
+        // Only draw median retracement line if time set is within the given session
+        DrawMedianRetracement := JHINN.isTimeInSession(DR.getExtensionTime(CurrentSession), str.tostring(str.substring(iMedianTime, 0, 4)))
+
+        if DrawMedianRetracement and iMedian
+            L_RET       := NewTimeLine(f_sessionTime(iMedianTime, _TIMEZONE, 0), icRetrace, line.style_solid)
+
+        // Only draw median extension line if time set is within the given session
+        DrawMedianExtension   := JHINN.isTimeInSession(DR.getExtensionTime(CurrentSession), str.tostring(str.substring(iMedianTime, 5, 9)))
+        if DrawMedianExtension and iMedian
+            L_EXT         := NewTimeLine(f_sessionTime(iMedianTime, _TIMEZONE, 1), icExtend, line.style_solid)
+
+
+
+    if inExtend()
+        // Start drawing Closing Price line
+        // **Offset by one bar by using variable 'RangeEndTime'
+        DRBroken := DRLowBrk or DRHighBrk
+        DRFalse := DRLowBrk and DRHighBrk
+        LB.MoveLine(L_ClosePrice, RangeEndTime, ClosePrice, EndTime + 1)
+
+
+    // ******************************************************************************************************
+    // If we're in the extension section of the session and a brake happens after the first hour, 
+    // we mute the color of the indication symbol
+    // ******************************************************************************************************
+    if inExtend() and not DRHighBrk and close_value > DRHigh
+        DRHighBrkTime := time
+
+        if not DRLowBrk
+            DRFirstBrkTime := time
+
+        if DRHighBrkTime <= JHINN.toTimestamp(SESSION_SECONDHOUR, _TIMEZONE)
+            BRUP_ASSIGNED := BRUP
+        else
+            BRUP_ASSIGNED := BR_MUTE
+
+        // Broadcast
+        DRHighBrk := true
+
+    if inExtend() and not DRLowBrk and close_value < DRLow
+        DRLowBrkTime := time
+
+        if not DRHighBrk 
+            DRFirstBrkTime := time
+            
+        if DRLowBrkTime <= JHINN.toTimestamp(SESSION_SECONDHOUR, _TIMEZONE)
+            BRDN_ASSIGNED := BRDN
+        else
+            BRDN_ASSIGNED := BR_MUTE
+
+        // Broadcast
+        DRLowBrk := true
+
+
+
+
+
+    if inExtend() and DRBroken
+        if not DRLowBrk and (iStatCond == "Wick" ? low_value < DRLow : close_value < DRLow)
+            DRLowBrk := true
+            DRLowBrkTime := time
+
+        if not DRHighBrk and (iStatCond == "Wick" ? high_value > DRHigh : close_value > DRHigh)
+            DRHighBrk := true
+            DRHighBrkTime := time
+
+    if leaveSession() and isRDRSession()[1] and dayofweek(time) == dayofweek.tuesday and iWDR
+        line.delete(WDRLine)
+        WDR := DR.NewWDRBox(bar_index, DRHigh[1], DRLow[1], true, iCWDR, iBorderWidth, iDisplayLabels ? iLabelTransp : 100, _bg_transp = iBGTransp, _border_transp = iBorderTransp)
+        WDRLine := NewWDRLine()
+        WDR_Mid := IDRMid[1]
+        WDRLineStartTime := time
+        array.push(_WDR, WDR)
+
+    if iWDR and not(na(WDRLine))
+        LB.MoveLine(WDRLine, WDRLineStartTime, WDR_Mid, time)
+
+    if inExtend() and iSTDLines
+        [RetraceA, RetraceB, RetraceAA, RetraceBB, ExtendA, ExtendB]    = DrawSDLines(RangeEndTime, SDLinesStopTime, DRHighBrk ? true : false) 
+        if iSTDLines
+            if DRBroken
+                RETA := RetraceA
+                RETB := RetraceB
+                RETAB := RetraceAA
+                RETBB := RetraceBB
+
+            EXTA   := ExtendA
+            EXTB   := ExtendB
+
+    // ADR Stats
+    if not inADRExtend() and inADRExtend()[1] and DRBroken[1]
+        STAT_ADR += 1
+        if not DRFalse[1]
+            STAT_ADR_TRUE += 1
+
+    // ODR Stats
+    if not inODRExtend() and inODRExtend()[1] and DRBroken[1]
+        STAT_ODR += 1
+        if not DRFalse[1]
+            STAT_ODR_TRUE += 1
+
+    // RDR Stats
+    if not inRDRExtend() and inRDRExtend()[1] and DRBroken[1]
+        STAT_RDR += 1
+        if not DRFalse[1]
+            STAT_RDR_TRUE += 1
+
+
+    // Remove all Standart Deviation lines and label if we're only showing them on one session
+    // rather than all of them. Clearing on entering the session to keep the lines and labels remaining
+    // until the next session, if we need to go back and re-analyse that session.
+
+    if leaveSession() and iSTDLines
+        if array.size(_ARRAY_ISDLEVELS) > 0
+            for tmpIndex = 0 to array.size(_ARRAY_ISDLINES)-1
+                line.delete(array.get(_ARRAY_ISDLINES, tmpIndex))
+            if iSTDLabels
+                for tmpIndex = 0 to array.size(_ARRAY_ISDLABELS)-1
+                    label.delete(array.get(_ARRAY_ISDLABELS, tmpIndex))
+
+            array.clear(_ARRAY_ISDLEVELS)
+            array.clear(_ARRAY_ISDLINES)
+
+        if not(iSTDAll) or iSTDAllType == "RDR" and iSTDAll
+            if array.size(_ARRAY_SDLEVELS) > 0
+                for tmpIndex = 0 to array.size(_ARRAY_SDLINES)-1
+                    line.delete(array.get(_ARRAY_SDLINES, tmpIndex))
+            if iSTDLabels and array.size(_ARRAY_SDLABELS) > 0
+                for tmpIndex = 0 to array.size(_ARRAY_SDLABELS)-1
+                    label.delete(array.get(_ARRAY_SDLABELS, tmpIndex))
+
+                array.clear(_ARRAY_SDLEVELS)
+                array.clear(_ARRAY_SDLINES)
+
+
+    if not(iSTDAll) and enterExtend() and isRDRSession()
+        if array.size(_ARRAY_RDR_SDLEVELS) > 0
+            for tmpIndex = 0 to array.size(_ARRAY_RDR_SDLINES)-1
+                line.delete(array.get(_ARRAY_RDR_SDLINES, tmpIndex))
+        if iSTDLabels and array.size(_ARRAY_RDR_SDLABELS) > 0
+            for tmpIndex = 0 to array.size(_ARRAY_RDR_SDLABELS)-1
+                label.delete(array.get(_ARRAY_RDR_SDLABELS, tmpIndex))
+
+            array.clear(_ARRAY_RDR_SDLEVELS)
+            array.clear(_ARRAY_RDR_SDLINES)
+
+    if leaveSession()
+        DRHighBrkTime := na
+        DRLowBrkTime := na
+
+        box = AddDRCluster(iDRClusters, color.new(iCDRClusters, iClusterTransp + 5), "", _ARRAY_DRC)
+        LB.MoveBox(box, OpenTime + 1, DRHigh, EndTime, IDRHigh, color.new(iCDRClusters, iClusterTransp + 5), color.new(iCDRClusters, iClusterTransp + 5))
+        box2 = AddDRCluster(iDRClusters, color.new(iCDRClusters, iClusterTransp + 5), "", _ARRAY_DRC)
+        LB.MoveBox(box2, OpenTime + 1, DRLow, EndTime, IDRLow, color.new(iCDRClusters, iClusterTransp + 5), color.new(iCDRClusters, iClusterTransp + 5))
+
+        // Retracement Levels
+        line.delete(L_RET)
+        line.delete(L_EXT)
+        box.delete(RETBoxA)
+        box.delete(RETBoxB)
+        box.delete(EXTBox)
+        line.delete(L_FIB)
+
+        // @TODO: Idea how to get the data out
+        // if isTokyo()[1]
+        //     ADR_False     := DRHighBrk and DRLowBrk
+        //     ADR_Broken    := DRBroken
+        //     ADR_BreakTime := str.tonumber(str.format_time(DRFirstBrkTime, "HHmm", TIMEZONE))
+
+        //     alert("{ADR: { broken: " + str.tostring(ADR_Broken) + ", break_time: " + str.tostring(ADR_False) + ", false_day: " + str.tostring(ADR_False) + " }}")
+        DRFalse         := false
+        DRBroken        := false
+        DRHighBrk       := false
+        DRLowBrk        := false
+        DRFirstBrkTime  := na
+        DRHigh          := na
+        DRLow           := na
+        IDRHigh         := na
+        IDRLow          := na
+
+
+    if inExtend() and DRBroken
+        var int RetraceBoxEndTime       = na
+        var int ExtensionBoxStartTime   = na
+        var int ExtensionBoxStopTime    = na
+
+
+        if not iMedian
+            ExtensionBoxStartTime := RangeEndTime
+            ExtensionBoxStopTime  := SDLinesStopTime
+            RetraceBoxEndTime     := SDLinesStopTime
+        else 
+            if DrawMedianExtension and not DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, _TIMEZONE, 1)
+                ExtensionBoxStopTime  := SDLinesStopTime
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, _TIMEZONE, 1)
+
+            if DrawMedianExtension and DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, _TIMEZONE, 0)
+                ExtensionBoxStopTime  := f_sessionTime(iMedianTime, _TIMEZONE, 1)
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, _TIMEZONE, 0)
+
+            if not DrawMedianExtension and DrawMedianRetracement
+                ExtensionBoxStartTime := f_sessionTime(iMedianTime, _TIMEZONE, 0)
+                ExtensionBoxStopTime  := SDLinesStopTime
+                RetraceBoxEndTime     := f_sessionTime(iMedianTime, _TIMEZONE, 0)
+        
+            if not DrawMedianExtension and not DrawMedianRetracement
+                ExtensionBoxStartTime := RangeEndTime
+                ExtensionBoxStopTime  := SDLinesStopTime
+                RetraceBoxEndTime     := SDLinesStopTime
+
+        // Retracement Range Box (Entry & Stop Loss)
+        if iRetrace and iSTDLines
+            LB.MoveBox(RETBoxA, RangeEndTime, RETA, RetraceBoxEndTime, RETB, color.new(icRetrace, 75), color.new(icRetrace, 75))
+        
+        if iRetrace2 and iSTDLines
+            LB.MoveBox(RETBoxB, RangeEndTime, RETAB, RetraceBoxEndTime, RETBB, color.new(icRetrace2, 75), color.new(icRetrace2, 75))
+
+        // Extension Range Box (Target)
+        if iExtend and iSTDLines
+            LB.MoveBox(EXTBox, ExtensionBoxStartTime, EXTA, ExtensionBoxStopTime, EXTB, color.new(icExtend, 75), color.new(icExtend, 75))
+
+
+
+
+    if enterExtend()
+        // @label
+        var bool test = false
+        if test // end time - median time
+            
+            
+            myLabel = label.new(x=bar_index, y=high, color=#1b411e, textcolor = #dbffcb, style=label.style_label_up, size=size.small, text = "====================\nRANGE: " + DR.getSecondHour(CurrentSession))
+            label.set_yloc(id=myLabel, yloc=yloc.belowbar)
+
+
+
+
+falseBarCondition = DRHighBrk and time == DRHighBrkTime and DRLowBrk or DRLowBrk and time == DRLowBrkTime and DRHighBrk
+
+
+
+
+
+
+
+// ********* VOLUME IMBALANCES *********
+var box[] _uvis     = array.new_box()
+var box[] _dvis     = array.new_box()
+
+// *** MARKET OPEN VOLUME IMBALANCES ***
+var box[] _uivis    = array.new_box()
+var box[] _divis    = array.new_box()
+
+// ********** RANGE LIMITERS ***********
+var box[] _ulmtr    = array.new_box()
+var box[] _dlmtr    = array.new_box()
+
+// ****** SPECIALS (TRAMPOLINE) *******
+var box[] _uspcl    = array.new_box()
+var box[] _dspcl    = array.new_box()
+
+// ******* STANDART IMBALANCES *******
+var box[] _ustnd    = array.new_box()
+var box[] _dstnd    = array.new_box()
+
+// *********** PRICE GAPS *************
+var box[] _ugap     = array.new_box()
+var box[] _dgap     = array.new_box()
+
+// FUNCTIONS
+newGap(color _color, string _name, bool _isBull = false) =>
+    LB.NewBox(
+      _left = bar_index-1,
+      _top = _isBull ? math.min(open, close) : math.max(open, close),
+      _right = bar_index+1,
+      _bottom = _isBull ? math.max(close[1], open[1]) : math.min(close[1], open[1]),
+      _name = iDisplayLabels ? _name : (_isBull ? '+' : '-'), 
+      _bg_color = color.new(_color, iVITransp), 
+      _border_color = color.new(_color, iVITransp), 
+      _border_width = 1, 
+      _border_style = line.style_solid, 
+      _text_halign = text.align_right, 
+      _text_valign = text.align_center, 
+      _text_size = __SIZE(iLabelSize), 
+      _text_color = _color, 
+      _xloc = xloc.bar_index)
+
+newImb(color _color, string _name, bool _isBull = false) =>
+    LB.NewBox(
+      _left = bar_index-1,
+      _top = open,
+      _right = bar_index+1,
+      _bottom = close[1],
+      _name = iDisplayLabels ? _name : (_isBull ? '+' : '-'), 
+      _bg_color = color.new(_color, iVITransp), 
+      _border_color = color.new(_color, iVITransp), 
+      _border_width = 1, 
+      _border_style = line.style_solid, 
+      _text_halign = text.align_right, 
+      _text_valign = text.align_center, 
+      _text_size = __SIZE(iLabelSize), 
+      _text_color = color.black, 
+      _xloc = xloc.bar_index)
+
+// Function to push new box into the respective array
+pushBoxIfCondition(bool condition, color _color, string _name, _array, bool _bull = false, int _limit = 0, bool _gap = false) =>
+    if condition and canPaint()
+        box _a = _gap ? newGap(_color, _name, _bull) : newImb(_color, _name, _bull)
+        if array.size(_array) > int(_limit < 1 ? _LIMIT_VIBS : _limit)
+            box.delete(array.shift(_array))
+        array.push(_array, _a)
+        // Return box
+        _a
+
+
+// ********************** BASIC VOLUME IMBALANCE (FOUNDATION) ************************ // 
+UP_VIB(index) => C.hasBodyGap(index) and C.wicksTouch(index) and C.isBullFormation(index)
+DN_VIB(index) => C.hasBodyGap(index) and C.wicksTouch(index) and C.isBearFormation(index)
+
+// ********************************* PRICE GAPS ************************************** // 
+UP_GAP(index) => C.hasBodyGap(index) and C.hasWickGap(index) and low[index] > high[index + 1]
+DN_GAP(index) => C.hasBodyGap(index) and C.hasWickGap(index) and high[index] < low[index + 1]
+
+pushBoxIfCondition(UP_GAP(0) and iGAP and JHINN.isNewTradingDay(), icGAP, "GAP+", _ugap, true, 50, true)
+pushBoxIfCondition(DN_GAP(0) and iGAP and JHINN.isNewTradingDay(), icGAP, "GAP-", _dgap, false, 50, true)
+
+pushBoxIfCondition(UP_VIB(0) and iVI, icVI, _VIB_REG, _uvis, true)
+pushBoxIfCondition(DN_VIB(0) and iVI, icVI, _VIB_REG, _dvis, false)
+
+
+if array.size(_divis) > 0
+    for i = array.size(_divis) - 1 to 0 by 1
+        _box = array.get(_divis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            box.set_text(_box, "")
+            box.set_border_color(_box, na)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_uivis) > 0
+    for i = array.size(_uivis) - 1 to 0 by 1
+        _box = array.get(_uivis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            box.set_text(_box, "")
+            box.set_border_color(_box, na)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+
+
+if array.size(_dvis) > 0
+    for i = array.size(_dvis) - 1 to 0 by 1
+        _box = array.get(_dvis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if high >= _boxHigh and bar_index == _boxRight
+            if iVIClusters
+                box.set_text(_box, "")
+                box.set_bgcolor(_box, color.new(icCluster, iClusterTransp))
+                box.set_border_color(_box, na)
+            else 
+                box.delete(_box)
+        else
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_uvis) > 0
+    for i = array.size(_uvis) - 1 to 0 by 1
+        _box = array.get(_uvis, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if low <= _boxHigh and bar_index == _boxRight
+            if iVIClusters
+                box.set_text(_box, "")
+                box.set_bgcolor(_box, color.new(icCluster, iClusterTransp))
+                box.set_border_color(_box, na)
+            else 
+                box.delete(_box)
+        else 
+            box.set_right(_box, bar_index + 1)
+
+
+
+if array.size(_dgap) > 0
+    for i = array.size(_dgap) - 1 to 0 by 1
+        _box = array.get(_dgap, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        if not(high >= math.max(_boxHigh, _boxLow)) and bar_index == _boxRight
+            box.set_right(_box, bar_index + 1)
+
+if array.size(_ugap) > 0
+    for i = array.size(_ugap) - 1 to 0 by 1
+        _box = array.get(_ugap, i)
+        _boxLow = box.get_bottom(_box)
+        _boxHigh = box.get_top(_box)
+        _boxRight = box.get_right(_box)
+        _boxLeft  = box.get_left(_box)
+
+        if not(low <= math.min(_boxHigh, _boxLow)) and bar_index == _boxRight
+            box.set_right(_box, bar_index + 1)
+
+
+
+
+
+//-----------------------------------------------------------------------------}
+//Dashboard
+//-----------------------------------------------------------------------------{
+var table_position = position.top_right
+var table_size = size.small
+
+var tb = table.new(table_position, 4, 4
+  , bgcolor = #ffffff
+  , border_color = #eff1fc
+  , border_width = 1
+  , frame_color = #eff1fc
+  , frame_width = 1)
+
+if iShowStats and canPaint()
+
+    tb.cell(0, 0, 'SESSION', text_color = cIDR, text_size = table_size)
+    tb.cell(0, 1, 'ADR (' + str.tostring(STAT_ADR) + ')', text_color = cBull, text_size = table_size)
+    tb.cell(0, 2, 'ODR (' + str.tostring(STAT_ODR) + ')', text_color = cOpen, text_size = table_size)
+    tb.cell(0, 3, 'RDR (' + str.tostring(STAT_RDR) + ')', text_color = cClose, text_size = table_size)
+    
+    tb.cell(1, 0, '%', text_color = cIDR, text_size = table_size)
+    //tb.cell(2, 0, '#', text_color = cIDR, text_size = table_size)
+ 
+    //Size
+    tb.cell(1, 1, str.tostring(STAT_ADR_TRUE / STAT_ADR * 100, format.percent), text_color = cIDR, text_size = table_size)
+    tb.cell(1, 2, str.tostring(STAT_ODR_TRUE / STAT_ODR * 100, format.percent), text_color = cIDR, text_size = table_size)
+    tb.cell(1, 3, str.tostring(STAT_RDR_TRUE / STAT_RDR * 100, format.percent), text_color = cIDR, text_size = table_size)  
+
+
+
+// --------------------- ALERTS ------------------- // 
+alertcondition(DRBroken,  "DR Broken", _INDICATOR + ". DR Broken")
+alertcondition(DRFalse,   "DR False", _INDICATOR + ". DR is FALSE")
+alertcondition(DRBroken and (close_value[1] < DRLow or close_value[1] > DRHigh) and close_value > DRLow and close_value < DRHigh,  "DR Retraced", _INDICATOR + ". DR Retraced back into the range")
+
+
+if iDaySeparators and JHINN.isNewTradingDay()
+    NewTimeLine(time, cNeutralBox, line.style_dashed)
+
+
+// Adjust where the DR break shows on lower timeframes
+var int CandlesForward = 0
+if timeframe.in_seconds(timeframe.period) < 360
+    CandlesForward := (360 / timeframe.in_seconds(timeframe.period)) - 1
+
+plotshape(DRHighBrk and time == DRHighBrkTime and not DRLowBrk, "DR High Broken", shape.triangleup, location.abovebar, size = size.auto, color = BRUP_ASSIGNED, display = display.pane, editable = false, force_overlay = true, offset = CandlesForward)
+plotshape(DRLowBrk and time == DRLowBrkTime and not DRHighBrk, "DR Low Broken", shape.triangledown, location.belowbar, size = size.auto, color = BRDN_ASSIGNED, display = display.pane, editable = false, force_overlay = true, offset = CandlesForward)
+
+textWatermark = table.new("top" + "_" + "center", 1, 3)
+
+if iShowDate
+    table.cell(textWatermark, 0, 0, str.format("{0,time,EEEE dd MMMM y}", time), 0, 0, c_title, "center", text_size = s_title)
+    table.cell(textWatermark, 0, 1, "", 0, 0, not(iShowDate) ? c_subtitle : na, "center", text_size = s_subtitle)
+else
+    table.cell(textWatermark, 0, 0, bTitle ? title : na, 0, 0, c_title, "center", text_size = s_title)
+    table.cell(textWatermark, 0, 1, bSubtitle ? subtitle : na, 0, 0, c_subtitle, "center", text_size = s_subtitle)
+
+
